@@ -1,4 +1,4 @@
-use crate::{error::RaffleProgramError::InvalidInstruction, state::{Term, InitPda, InitRaffle}};
+use crate::{error::RaffleProgramError::InvalidInstruction, state::{InitPda, InitRaffle, RandomNumber, Term}};
 use borsh::BorshDeserialize;
 use solana_program::program_error::ProgramError;
 
@@ -6,7 +6,7 @@ use solana_program::program_error::ProgramError;
 pub enum RaffleProgramInstruction {
     InitRaffle{init_raffle:InitRaffle},
     JoinRaffle,
-    ChooseWinner,
+    ChooseWinner{rng_call_limit:RandomNumber},
     PublishWinner,
     ClaimPrize,
     InitCounter,
@@ -28,7 +28,9 @@ impl RaffleProgramInstruction {
         init_raffle:InitRaffle::try_from_slice(&rest)?
       },
       1 => Self::JoinRaffle,
-      2 => Self::ChooseWinner,
+      2 => Self::ChooseWinner{
+        rng_call_limit:RandomNumber::try_from_slice(&rest)?
+      },
       3 => Self::PublishWinner,
       4 => Self::InitCounter,
       5 => Self::ClosePDA,
