@@ -1,4 +1,4 @@
-use crate::{error::RaffleProgramError::InvalidInstruction, state::{InitPda, InitRaffle, RandomNumber, Term}};
+use crate::{error::RaffleProgramError::InvalidInstruction, state::{ InitRaffle, RandomNumber, RewardFeeType, Term}};
 use borsh::BorshDeserialize;
 use solana_program::program_error::ProgramError;
 
@@ -11,12 +11,16 @@ pub enum RaffleProgramInstruction {
     ClaimPrize,
     InitCounter,
     ClosePDA,
-    InitTerm{data:InitPda},
+    InitTerm,
     InitConfig,
     SetConfig,
     UpdateTerm{data:Term},
     CollectFee,
-    CollectFeeInitializer
+    CollectFeeInitializer,
+    InitFeeCollector,
+    InitFeeType{data:RewardFeeType},
+    InitRewType{data:RewardFeeType},
+    CollectFeeToken
 }
 
 impl RaffleProgramInstruction {
@@ -34,15 +38,21 @@ impl RaffleProgramInstruction {
       3 => Self::PublishWinner,
       4 => Self::InitCounter,
       5 => Self::ClosePDA,
-      6 => Self::InitTerm{
-        data:InitPda::try_from_slice(&rest)?
-      },
+      6 => Self::InitTerm,
       7 => Self::InitConfig,
       8 => Self::SetConfig,
       9 => Self::UpdateTerm{
         data:Term::try_from_slice(&rest)?
       },
       10 => Self::CollectFee,
+      20 => Self::CollectFeeToken,
+      35 => Self::InitFeeType{
+        data:RewardFeeType::try_from_slice(&rest)?
+      },
+      36 => Self::InitRewType{
+        data:RewardFeeType::try_from_slice(&rest)?
+      },
+      40 => Self::InitFeeCollector,
       100 => Self::ClaimPrize,
       200 => Self::CollectFeeInitializer,
 

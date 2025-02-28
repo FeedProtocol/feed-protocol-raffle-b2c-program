@@ -56,7 +56,7 @@ pub struct Participant{
     pub entitled:u8,
     pub prize_claimed:u8,
     pub index_in_winners:u64
-}
+}//58
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]//9
 pub struct RaffleCounter{
@@ -86,16 +86,16 @@ pub struct Config{
     pub authority_4:[u8;32],
 }
 
-#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq)]
-pub struct InitPda{
-    pub bump:u8,
-    pub lamports:u64,
-    pub no:u8,
-}
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq)]
 pub struct RewardFeeType{
+    pub initialized:u8,
     pub mint:[u8;32],
     pub decimals:u8,
     pub no:u64,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]//9
+pub struct FeeCollector{
+    pub initialized:u8,
 }

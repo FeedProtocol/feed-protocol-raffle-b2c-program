@@ -1,13 +1,13 @@
-use crate::{instruction::RaffleProgramInstruction, state::{ Config, InitPda, InitRaffle, Participant, Raffle, RaffleCounter, RandomNumber, RewardFeeType, Term}};
+use crate::{instruction::RaffleProgramInstruction, state::{ Config, FeeCollector, InitRaffle, Participant, Raffle, RaffleCounter, RandomNumber, RewardFeeType, Term}};
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::{
     account_info::{next_account_info, AccountInfo},  entrypoint::ProgramResult,
      instruction::{AccountMeta, Instruction}, msg, program::{get_return_data, invoke, invoke_signed},
       pubkey::Pubkey, rent::Rent, system_instruction,   sysvar::{clock::Clock, Sysvar,},
-
 };
+
 use solana_program::program_pack::Pack;
-use spl_token::state::Account;
+use spl_token::state::{Account, Mint};
 
 
 use crate::error::RaffleProgramError::{InvalidCounter, ArithmeticError, InvalidInitializer, WritableAccount,
@@ -41,17 +41,17 @@ impl Processor {
             RaffleProgramInstruction::PublishWinner => {
                 Self::publish_winner(accounts, program_id)
             },
-            RaffleProgramInstruction::InitCounter => {
-                Self::init_raffle_counter(accounts, program_id)
-            },
             RaffleProgramInstruction::ClosePDA => {
                 Self::close_participant_pda(accounts)
             },
-            RaffleProgramInstruction::InitTerm {data}=> {
-                Self::init_term_account(accounts, program_id, data)
+            RaffleProgramInstruction::InitTerm => {
+                Self::init_term_account(accounts, program_id)
             },
             RaffleProgramInstruction::InitConfig => {
                 Self::init_config(accounts, program_id)
+            },
+            RaffleProgramInstruction::InitCounter => {
+                Self::init_raffle_counter(accounts, program_id)
             },
             RaffleProgramInstruction::SetConfig => {
                 Self::set_config(accounts, program_id)
@@ -68,7 +68,18 @@ impl Processor {
             RaffleProgramInstruction::CollectFeeInitializer => {
                 Self::collect_fee_initializer(accounts, program_id)
             },
-
+            RaffleProgramInstruction::InitFeeType {data}=> {
+                Self::init_fee_type_account(accounts, program_id, data)
+            },
+            RaffleProgramInstruction::InitRewType {data}=> {
+                Self::init_reward_type_account(accounts, program_id, data)
+            },
+            RaffleProgramInstruction::CollectFeeToken => {
+                Self::collect_fee_token(accounts, program_id)
+            },
+            RaffleProgramInstruction::InitFeeCollector => {
+                Self::init_fee_collector_account(accounts, program_id)
+            },
         }
     }
 
@@ -85,12 +96,13 @@ impl Processor {
        let raffle_pda: &AccountInfo<'_> = next_account_info(accounts_iter)?;
        let raffle_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
        let counter_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
-       let reward_mint: &AccountInfo<'_> = next_account_info(accounts_iter)?;
-       let token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
-       let sysvar: &AccountInfo<'_> = next_account_info(accounts_iter)?;
        let term_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
        let reward_type_pda: &AccountInfo<'_> = next_account_info(accounts_iter)?;
        let fee_type_pda: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+       let reward_mint: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+       let token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+       let sysvar: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+
 
 
        let mut counter: RaffleCounter = RaffleCounter::try_from_slice(&counter_account.data.borrow())?;
@@ -98,6 +110,8 @@ impl Processor {
        let reward_type: RewardFeeType = RewardFeeType::try_from_slice(&reward_type_pda.data.borrow())?;
        let fee_type: RewardFeeType = RewardFeeType::try_from_slice(&fee_type_pda.data.borrow())?;
 
+       if reward_type.initialized != 2 {return Err(InvalidTerms.into());}
+       if fee_type.initialized != 3 {return Err(InvalidTerms.into());}
 
        counter.number_of_raffles = counter.number_of_raffles.checked_add(1).ok_or(ArithmeticError)?;
 
@@ -229,7 +243,6 @@ impl Processor {
         }
 
 
-
         let mut attempts:u64 = 0;
 
         let mut winners: Vec<u64> = raffle.winners.clone();
@@ -243,9 +256,9 @@ impl Processor {
         let token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
 
         let total_rewards = raffle.rewards.iter().sum();
-            
+
             Self::abort_raffle(initializer,initializer_ata,raffle_pda,raffle_ata,reward_mint,token_program,total_rewards,raffle.reward_decimals)?;
-            raffle.raffle_state = 2;
+            raffle.raffle_state = 3;
 
         }else if raffle.current_number_of_participants == 1  {
             let winner_no:u64 = 1;
@@ -286,7 +299,6 @@ impl Processor {
                 raffle.raffle_state = 2;
             }
         }
-
 
 
         raffle.serialize(&mut &mut raffle_pda.data.borrow_mut()[..])?;
@@ -457,48 +469,37 @@ impl Processor {
         let accounts_iter: &mut std::slice::Iter<'_, AccountInfo<'_>> = &mut accounts.iter();
 
         let initializer: &AccountInfo<'_> = next_account_info(accounts_iter)?;
-        let raffle_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+        let raffle_pda: &AccountInfo<'_> = next_account_info(accounts_iter)?;
         let term_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+        let fee_collector_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
 
-        if !initializer.is_signer {return Err(InitializerNotSigner.into());}
 
-        let  raffle: Raffle = Raffle::try_from_slice(&raffle_account.data.borrow())?;
-        let  fee: Term = Term::try_from_slice(&term_account.data.borrow())?;
+        let  raffle: Raffle = Raffle::try_from_slice(&raffle_pda.data.borrow())?;
+        let  terms: Term = Term::try_from_slice(&term_account.data.borrow())?;
+        let  fee_collector: FeeCollector = FeeCollector::try_from_slice(&fee_collector_account.data.borrow())?;
 
-        if fee.initialized != 2 {return Err(InvalidFee.into());}
+        if terms.initialized != 2 {return Err(InvalidFee.into());}
+        if fee_collector.initialized != 2 {return Err(InvalidFee.into());}
 
-        if raffle_account.owner != program_id {return Err(InvalidRaffle.into());}
+        if raffle_pda.owner != program_id {return Err(InvalidRaffle.into());}
         if term_account.owner != program_id {return Err(InvalidRaffle.into());}
+        if fee_collector_account.owner != program_id {return Err(InvalidRaffle.into());}
 
         if raffle.raffle_state < 2{return Err(InvalidRaffleState.into());}
         if raffle.initializer != initializer.key.to_bytes() {return Err(InvalidInitializer.into());}
 
-        let rent: Rent = Rent::default();
-        let rent_amount: u64 = rent.minimum_balance(187);
+        if raffle.participation_fee_type == 1{
+            Self::send_fee_as_sol(raffle_pda, initializer, fee_collector_account, terms.fee_percent)?;
+        }else{
 
-        msg!("1");
-        let total_value: u64 = **raffle_account.try_borrow_lamports()?;
-        msg!("2");
-        let collected_value: u64 = total_value.checked_sub(rent_amount).ok_or(ArithmeticError)?;
-        msg!("3");
-        let collected_value_div_by_100: u64 = collected_value.checked_div(100).ok_or(ArithmeticError)?;
-        msg!("4");
-        let total_fee:u64 = collected_value_div_by_100.checked_mul(fee.fee_percent).ok_or(ArithmeticError)?;
-        msg!("5");
-        let transfer_to_initializer: u64 = collected_value.checked_sub(total_fee).ok_or(ArithmeticError)?;
-        {
-            msg!("total_value = {}",total_value);
-            msg!("collected_value = {}",collected_value);
-            msg!("collected_value_div_by_100 = {}",collected_value_div_by_100);
-            msg!("total_fee = {}",total_fee);
-            msg!("transfer_to_initializer = {}",transfer_to_initializer);
+        let fee_collector_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+        let initializer_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+        let raffle_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+        let token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+        let participation_fee_mint: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+
+        Self::send_fee_as_token(fee_collector_ata, raffle_ata, raffle_pda, initializer_ata, token_program, participation_fee_mint, terms.fee_percent, raffle.raffle_no, raffle.participation_fee_decimals)?;
         }
-
-        **raffle_account.try_borrow_mut_lamports()? -= total_fee;
-        **raffle_account.try_borrow_mut_lamports()? -= transfer_to_initializer;
-
-        **term_account.try_borrow_mut_lamports()? += total_fee;
-        **initializer.try_borrow_mut_lamports()? += transfer_to_initializer;
 
         Ok(())
     }
@@ -669,7 +670,6 @@ impl Processor {
     fn init_term_account(
     accounts: &[AccountInfo],
     program_id: &Pubkey,
-    data: InitPda,
     ) -> ProgramResult {
 
     let accounts_iter: &mut std::slice::Iter<'_, AccountInfo<'_>> = &mut accounts.iter();
@@ -693,12 +693,16 @@ impl Processor {
 
     let (term_account_pubkey, bump) = Pubkey::find_program_address(&[b"term"], program_id);
 
+
+    let rent: Rent = Rent::default();
+    let rent_amount: u64 = rent.minimum_balance(25);
+
     let create_ix: solana_program::instruction::Instruction =
         system_instruction::create_account(
             authority.key,
             &term_account_pubkey,
-            data.lamports,
-            17,
+            rent_amount,
+            25,
             program_id,
         );
 
@@ -719,6 +723,233 @@ impl Processor {
 
     Ok(())
 }
+
+    fn init_fee_collector_account(
+    accounts: &[AccountInfo],
+    program_id: &Pubkey,
+    ) -> ProgramResult {
+
+    let accounts_iter: &mut std::slice::Iter<'_, AccountInfo<'_>> = &mut accounts.iter();
+
+    let authority: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let fee_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let config_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+
+    if config_account.owner != program_id {
+        return Err(InvalidConfig.into());
+    }
+
+    let config: Config = Config::try_from_slice(&config_account.data.borrow())?;
+
+
+    Self::check_authority(authority.key, config)?;
+
+    if !authority.is_signer {
+        return Err(NotSignerAuth.into());
+    }
+
+    let (term_account_pubkey, bump) = Pubkey::find_program_address(&[b"fee_collector"], program_id);
+
+    let rent: Rent = Rent::default();
+    let rent_amount: u64 = rent.minimum_balance(1);
+
+    let create_ix: solana_program::instruction::Instruction =
+        system_instruction::create_account(
+            authority.key,
+            &term_account_pubkey,
+            rent_amount,
+            1,
+            program_id,
+        );
+
+    invoke_signed(
+        &create_ix,
+        &[authority.clone(), fee_account.clone()],
+        &[&[b"fee_collector", &[bump]]],
+    )?;
+
+    let fee_collector: FeeCollector = FeeCollector { 
+        initialized: 3,
+    };
+
+    fee_collector.serialize(&mut &mut fee_account.data.borrow_mut()[..])?;
+
+    Ok(())
+}
+    
+    fn init_fee_type_account(
+    accounts: &[AccountInfo],
+    program_id: &Pubkey,
+    fee_type: RewardFeeType
+    ) -> ProgramResult {
+
+    let accounts_iter: &mut std::slice::Iter<'_, AccountInfo<'_>> = &mut accounts.iter();
+
+    let authority: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let fee_type_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let fee_collector: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let fee_collector_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let token_mint: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let sysvar: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let config_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+
+    if config_account.owner != program_id {
+        return Err(InvalidConfig.into());
+    }
+
+    let config: Config = Config::try_from_slice(&config_account.data.borrow())?;
+
+
+    Self::check_authority(authority.key, config)?;
+
+    if !authority.is_signer {
+        return Err(NotSignerAuth.into());
+    }
+
+    let (fee_type_pda_address, bump) = Pubkey::find_program_address(&[b"feetype", &fee_type.no.to_le_bytes(), ], program_id);
+
+    let rent: Rent = Rent::default();
+    let rent_amount: u64 = rent.minimum_balance(42);
+
+    let create_ix: solana_program::instruction::Instruction =
+        system_instruction::create_account(
+            authority.key,
+            &fee_type_pda_address,
+            rent_amount,
+            42,
+            program_id,
+        );
+
+    invoke_signed(
+        &create_ix,
+        &[authority.clone(), fee_type_account.clone()],
+        &[&[b"feetype", &fee_type.no.to_le_bytes(), &[bump]]],
+    )?;
+
+    let create_ata: solana_program::instruction::Instruction = create_associated_token_account(
+        authority.key,
+        fee_collector.key, 
+        token_mint.key, 
+        token_program.key);
+            
+    invoke(&create_ata,
+          &[authority.clone(),
+          fee_collector.clone(),
+          fee_collector_ata.clone(),
+          token_mint.clone(),
+          token_program.clone(),
+          sysvar.clone()])?;
+
+
+    fee_type.serialize(&mut &mut fee_type_account.data.borrow_mut()[..])?;
+
+    Ok(())
+}
+        
+    fn init_reward_type_account(
+    accounts: &[AccountInfo],
+    program_id: &Pubkey,
+    reward_type: RewardFeeType
+    ) -> ProgramResult {
+
+    let accounts_iter: &mut std::slice::Iter<'_, AccountInfo<'_>> = &mut accounts.iter();
+
+    let authority: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let reward_type_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let config_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+
+    if config_account.owner != program_id {
+        return Err(InvalidConfig.into());
+    }
+
+    let config: Config = Config::try_from_slice(&config_account.data.borrow())?;
+
+
+    Self::check_authority(authority.key, config)?;
+
+    if !authority.is_signer {
+        return Err(NotSignerAuth.into());
+    }
+
+    let (fee_type_pda_address, bump) = Pubkey::find_program_address(&[b"rewtype", &reward_type.no.to_le_bytes(), ], program_id);
+
+    let rent: Rent = Rent::default();
+    let rent_amount: u64 = rent.minimum_balance(42);
+
+    let create_ix: solana_program::instruction::Instruction =
+        system_instruction::create_account(
+            authority.key,
+            &fee_type_pda_address,
+            rent_amount,
+            42,
+            program_id,
+        );
+
+    invoke_signed(
+        &create_ix,
+        &[authority.clone(), reward_type_account.clone()],
+        &[&[b"rewtype", &reward_type.no.to_le_bytes(), &[bump]]],
+    )?;
+
+
+    reward_type.serialize(&mut &mut reward_type_account.data.borrow_mut()[..])?;
+
+    Ok(())
+}
+
+    fn collect_fee_token(
+    accounts: &[AccountInfo],
+    program_id: &Pubkey,
+    ) -> ProgramResult {
+
+    let accounts_iter: &mut std::slice::Iter<'_, AccountInfo<'_>> = &mut accounts.iter();
+
+    let authority: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let authority_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let fee_collector: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let fee_collector_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let participation_fee_mint: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let config_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+
+    if config_account.owner != program_id {
+        return Err(InvalidConfig.into());
+    }
+
+
+    let config: Config = Config::try_from_slice(&config_account.data.borrow())?;
+
+    Self::check_authority(authority.key, config)?;
+
+    if !authority.is_signer {
+        return Err(NotSignerAuth.into());
+    }
+
+
+    let fee_collector_ata_unpacked: spl_token::state::Account = Account::unpack_from_slice(&fee_collector_ata.data.borrow())?;
+    let mint_unpacked: Mint = Mint::unpack(&participation_fee_mint.data.borrow())?;
+
+    let collected_value: u64 = fee_collector_ata_unpacked.amount;
+    let decimals: u8 = mint_unpacked.decimals;
+
+
+    let transfer_collected_fee_to_initializer: Instruction = spl_token::instruction::transfer_checked(
+            &token_program.key,
+            &fee_collector_ata.key, 
+            &participation_fee_mint.key, 
+            &authority_ata.key, 
+            &fee_collector.key, 
+            &[],collected_value,decimals)?;
+
+    invoke_signed(
+        &transfer_collected_fee_to_initializer, 
+        &[token_program.clone(),authority_ata.clone(),participation_fee_mint.clone(),fee_collector_ata.clone(),fee_collector.clone()],
+        &[&[b"fee_collector"]]
+        )?;
+
+    Ok(())
+   }
 
     fn update_terms(
     accounts: &[AccountInfo],
@@ -783,16 +1014,20 @@ impl Processor {
         return Err(NotSignerAuth.into());
     }
 
+
     let value: u64 = **fee_collector.lamports.borrow();
 
-    let collected_fee: u64 = value.checked_sub(2500000).ok_or(ArithmeticError)?;
+    let rent: Rent = Rent::default();
+    let rent_amount: u64 = rent.minimum_balance(232);
+
+    let collected_fee: u64 = value.checked_sub(rent_amount).ok_or(ArithmeticError)?;
 
     **fee_collector.try_borrow_mut_lamports()? -= collected_fee;
     **authority.try_borrow_mut_lamports()? += collected_fee;
     
     Ok(())
    }
-
+    
     fn check_authority(
         authority: &Pubkey, config: Config
     ) -> ProgramResult {
@@ -814,6 +1049,7 @@ impl Processor {
     
         Ok(())
     }
+    
     fn init_participant_pda<'a>(
         participant:&AccountInfo<'a>,
         participant_pda:&AccountInfo<'a>,
@@ -903,6 +1139,7 @@ impl Processor {
 
         Ok(())
     }
+    
     fn transfer_participation_fee_solana<'a>(
         participant:&AccountInfo<'a>,
         raffle_pda:&AccountInfo<'a>,
@@ -917,6 +1154,7 @@ impl Processor {
 
         Ok(())
     }
+    
     fn transfer_participation_fee_token<'a>(
         token_program:&AccountInfo<'a>,
         participant:&AccountInfo<'a>,
@@ -944,6 +1182,7 @@ impl Processor {
 
         Ok(())
     }
+    
     fn transfer_reward_to_raffle_pda<'a>(
         reward_mint:&AccountInfo<'a>,
         raffle_ata:&AccountInfo<'a>,
@@ -971,6 +1210,7 @@ impl Processor {
 
         Ok(())
     }
+    
     fn create_raffle_pda<'a>(
         initializer:&AccountInfo<'a>,
         raffle_pda:&AccountInfo<'a>,
@@ -1000,6 +1240,7 @@ impl Processor {
 
         Ok(())
     }
+    
     fn create_raffle_ata<'a>(
         initializer:&AccountInfo<'a>,
         raffle_pda:&AccountInfo<'a>,
@@ -1009,13 +1250,13 @@ impl Processor {
         sysvar:&AccountInfo<'a>,
     )-> ProgramResult{
     
-        let create_dex_ata: solana_program::instruction::Instruction = create_associated_token_account(
+        let create_ata: solana_program::instruction::Instruction = create_associated_token_account(
             initializer.key,
             raffle_pda.key, 
             token_mint.key, 
             token_program.key);
                 
-        invoke(&create_dex_ata,
+        invoke(&create_ata,
               &[initializer.clone(),
               raffle_ata.clone(),
               raffle_pda.clone(),
@@ -1025,6 +1266,7 @@ impl Processor {
         
         Ok(())
     }
+    
     fn check_participation_fee_type(
         program_id: &Pubkey,
         fee_type: &RewardFeeType,
@@ -1046,6 +1288,7 @@ impl Processor {
 
         Ok(())
     }
+    
     fn check_participation_reward_type_and_sum(
         program_id: &Pubkey,
         reward_type: &RewardFeeType,
@@ -1068,6 +1311,7 @@ impl Processor {
     
         Ok(())
     }
+    
     fn check_and_write_raffle_data<'a>(
         init_raffle:&InitRaffle,
         terms:&Term,
@@ -1127,6 +1371,7 @@ impl Processor {
 
         Ok(())
     }
+    
     fn check_accounts_init_raffle(
         counter:&RaffleCounter,
         terms:&Term,
@@ -1143,6 +1388,7 @@ impl Processor {
 
         if terms.initialized != 2 {return Err(InvalidTerms.into());}
 
+
         if counter_account.owner != program_id{return Err(InvalidCounter.into());}
         if term_account.owner != program_id{return Err(InvalidTerms.into());}
         if reward_type_pda.owner != program_id{return Err(InvalidRewardType.into());}
@@ -1158,6 +1404,7 @@ impl Processor {
 
         Ok(())
     }
+    
     fn call_rng<'a>(
         authority: &AccountInfo<'a>,
         entropy_account: &AccountInfo<'a>,
@@ -1207,12 +1454,12 @@ impl Processor {
 
         Ok(())
     }
+    
     fn check_mint_and_owner(
         mint: &Pubkey,owner: &Pubkey,ata:&AccountInfo
     ) -> ProgramResult {
 
         let ata_unpacked: spl_token::state::Account = Account::unpack_from_slice(&ata.data.borrow())?;
-    
     
         if mint != &ata_unpacked.mint {panic!()}
         if owner != &ata_unpacked.owner {panic!()}
@@ -1220,6 +1467,7 @@ impl Processor {
         Ok(())
 
     }
+    
     fn check_amount(
         amount: u64, ata:&AccountInfo
     ) -> ProgramResult{
@@ -1262,6 +1510,100 @@ impl Processor {
         Ok(())
     }
 
+    fn send_fee_as_sol<'a>(
+        raffle_account:&AccountInfo<'a>,
+        initializer:&AccountInfo<'a>,
+        fee_collector_account:&AccountInfo<'a>,
+        fee_percent:u64,
+    ) -> ProgramResult {
+
+        let rent: Rent = Rent::default();
+        let rent_amount: u64 = rent.minimum_balance(187);
+
+
+        msg!("1");
+        let total_value: u64 = **raffle_account.try_borrow_lamports()?;
+
+        msg!("2");
+        let collected_value: u64 = total_value.checked_sub(rent_amount).ok_or(ArithmeticError)?;
+        msg!("3");
+        let collected_value_div_by_100: u64 = collected_value.checked_div(100).ok_or(ArithmeticError)?;
+        msg!("4");
+        let total_fee:u64 = collected_value_div_by_100.checked_mul(fee_percent).ok_or(ArithmeticError)?;
+        msg!("5");
+        let transfer_to_initializer: u64 = collected_value.checked_sub(total_fee).ok_or(ArithmeticError)?;
+        {
+            msg!("total_value = {}",total_value);
+            msg!("collected_value = {}",collected_value);
+            msg!("collected_value_div_by_100 = {}",collected_value_div_by_100);
+            msg!("total_fee = {}",total_fee);
+            msg!("transfer_to_initializer = {}",transfer_to_initializer);
+        }
+
+
+        **raffle_account.try_borrow_mut_lamports()? -= total_fee;
+        **raffle_account.try_borrow_mut_lamports()? -= transfer_to_initializer;
+
+        **fee_collector_account.try_borrow_mut_lamports()? += total_fee;
+        **initializer.try_borrow_mut_lamports()? += transfer_to_initializer;
+
+        Ok(())
+    }
+
+    fn send_fee_as_token<'a>(
+        fee_collector_ata: &AccountInfo<'a>,
+        raffle_ata: &AccountInfo<'a>,
+        raffle_pda: &AccountInfo<'a>,
+        initializer_ata: &AccountInfo<'a>,
+        token_program: &AccountInfo<'a>,
+        participation_fee_mint: &AccountInfo<'a>,
+        fee_percent:u64,
+        raffle_no:u64,
+        decimals:u8
+    ) -> ProgramResult {
+
+        let raffle_ata_unpacked: spl_token::state::Account = Account::unpack_from_slice(&raffle_ata.data.borrow())?;
+
+        let collected_value: u64 = raffle_ata_unpacked.amount;
+
+
+        let collected_value_div_by_100: u64 = collected_value.checked_div(100).ok_or(ArithmeticError)?;
+        let total_fee:u64 = collected_value_div_by_100.checked_mul(fee_percent).ok_or(ArithmeticError)?;
+        let transfer_to_initializer: u64 = collected_value.checked_sub(total_fee).ok_or(ArithmeticError)?;
+
+        let transfer_collected_fee_to_initializer
+         = spl_token::instruction::transfer_checked(
+            &token_program.key,
+            &raffle_ata.key, 
+            &participation_fee_mint.key, 
+            &initializer_ata.key, 
+            &raffle_pda.key, 
+            &[],transfer_to_initializer,decimals)?;
+
+        invoke_signed(
+        &transfer_collected_fee_to_initializer, 
+        &[token_program.clone(),raffle_ata.clone(),participation_fee_mint.clone(),fee_collector_ata.clone(),raffle_pda.clone()],
+        &[&[b"raffle", &raffle_no.to_le_bytes()]]
+        )?;
+
+        let transfer_fee_to_fee_collector
+         = spl_token::instruction::transfer_checked(
+            &token_program.key,
+            &raffle_ata.key, 
+            &participation_fee_mint.key, 
+            &fee_collector_ata.key, 
+            &raffle_pda.key, 
+            &[],total_fee,decimals)?;
+
+        invoke_signed(
+        &transfer_fee_to_fee_collector, 
+        &[token_program.clone(),raffle_ata.clone(),participation_fee_mint.clone(),fee_collector_ata.clone(),raffle_pda.clone()],
+        &[&[b"raffle", &raffle_no.to_le_bytes()]]
+        )?;
+
+        Ok(())
+    }
+
 }
 
 
@@ -1269,4 +1611,7 @@ impl Processor {
 //cekilis yapildi  - 2
 //kazanan yazildi - 3
 //kazanan odulu aldi - 4
+
+
+
 

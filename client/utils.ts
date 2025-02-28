@@ -1,5 +1,5 @@
 import { deserialize, serialize } from "borsh";
-import { CounterSchema, Counter, RaffleSchema, Raffle, Participation, ParticipationSchema, TermsSchema, Terms } from "./models";
+import { CounterSchema, Counter, RaffleSchema, Raffle, Participant, ParticipantSchema, TermSchema, Term, RewardFeeType, RewardFeeTypeSchema } from "./models";
 import { AccountInfo, PublicKey } from "@solana/web3.js";
 import { connection } from "./connection";
 
@@ -39,17 +39,14 @@ export function stringToNumberArray32Bytes(input: string): number[] {
 
 export function deserialize_raffle_account_data(account_info:AccountInfo<Buffer>){
 
-    const raffle = deserialize(RaffleSchema,Raffle,account_info.data);
+    const raffle = deserialize(RaffleSchema,account_info.data) as Raffle;
 
     console.log("raffle no = " + raffle.raffle_no.toString())
-    console.log("winner no = " + raffle.winner_no.toString())
     console.log("raffle state = " + raffle.raffle_state.toString())
     console.log("current number of participants = " + raffle.current_number_of_participants.toString())
     console.log("participants required = " + raffle.participants_required.toString())
-    console.log("prize amount = " + raffle.prize_amount.toString())
     console.log("participation_fee = " + raffle.participation_fee.toString())
     console.log("initializer = " + new PublicKey(raffle.initializer).toBase58())
-    console.log("winner = " + new PublicKey(raffle.winner_address).toBase58())
 
     return raffle;
 
@@ -58,7 +55,7 @@ export function deserialize_raffle_account_data(account_info:AccountInfo<Buffer>
 
 export function deserialize_participation_account_data(account_info:AccountInfo<Buffer>){
 
-    const participation = deserialize(ParticipationSchema,Participation,account_info.data);
+    const participation = deserialize(ParticipantSchema,account_info.data) as Participant;
 
 
     console.log("raffle no = " + participation.raffle_no.toString())
@@ -70,7 +67,7 @@ export function deserialize_participation_account_data(account_info:AccountInfo<
 
 export function deserialize_counter_account_data(account_info:AccountInfo<Buffer>){
 
-    const counter = deserialize(CounterSchema,Counter,account_info.data);
+    const counter = deserialize(CounterSchema,account_info.data) as Counter;
 
     return counter;
 
@@ -78,12 +75,20 @@ export function deserialize_counter_account_data(account_info:AccountInfo<Buffer
 
 export function deserialize_term_account_data(account_info:AccountInfo<Buffer>){
 
-    const terms = deserialize(TermsSchema,Terms,account_info.data);
+    const terms = deserialize(TermSchema,account_info.data) as Term;
 
     console.log(terms.expiration_time)
-    console.log(terms.fee)
-    console.log(terms.init)
     
     return terms;
 
+}
+
+export function deserialize_fee_and_reward_type_account_data(account_info:AccountInfo<Buffer>){
+
+    const rewardfeetype = deserialize(RewardFeeTypeSchema,account_info.data) as RewardFeeType;
+
+    console.log(rewardfeetype)
+
+    
+    return rewardfeetype;
 }

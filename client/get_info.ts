@@ -1,7 +1,7 @@
 import { PublicKey } from "@solana/web3.js";
 import { raffle_program } from "./accounts";
 import { connection } from "./connection";
-import { deserialize_participation_account_data, deserialize_raffle_account_data, deserialize_term_account_data, numberToLEBytes8 } from "./utils";
+import { deserialize_fee_and_reward_type_account_data, deserialize_participation_account_data, deserialize_raffle_account_data, deserialize_term_account_data, numberToLEBytes8 } from "./utils";
 
 import baseX from "base-x";
 import { getMint } from "@solana/spl-token";
@@ -300,7 +300,7 @@ export const get_all_participation_accounts_by_raffle_no = async(raffle_no:bigin
 
 }
 
-export const get_participation_account_by_raffle_noand_winner_no = async(raffle_no:bigint,participant_no:bigint) => {
+export const get_participation_account_by_raffle_no_and_winner_no = async(raffle_no:bigint,participant_no:bigint) => {
 
   const raffle_no_le_bytes = numberToLEBytes8(raffle_no)
   const participant_no_le_bytes = numberToLEBytes8(participant_no)
@@ -308,12 +308,13 @@ export const get_participation_account_by_raffle_noand_winner_no = async(raffle_
   const raffle = bs58.encode(raffle_no_le_bytes);
   const participant = bs58.encode(participant_no_le_bytes);
 
+
   const account = await connection.getProgramAccounts(
       raffle_program,
       {
         filters: [
           {
-            dataSize: 48,
+            dataSize: 58,
           },
           {
             memcmp: {
@@ -345,14 +346,14 @@ export const get_raffle_counter = async() => {
     
 }
 
-export const get_token_program_and_decimals = async (token_mint:PublicKey) : Promise<[PublicKey, number]> => {
+export const get_token_program_and_decimals = async (token_mint:PublicKey) : Promise<PublicKey> => {
     
   const mint = await connection.getAccountInfo(token_mint);
   const token_program = mint?.owner!;
   const decimals = (await getMint(connection, token_mint, "confirmed", token_program)).decimals;
 
 
-  return [token_program, decimals];
+  return token_program;
 }
 
 export const get_terms = async() => {
@@ -363,5 +364,19 @@ export const get_terms = async() => {
 
   deserialize_term_account_data(account!)
   
+}
+
+export const get_participation_fee_mint = async(type_no:bigint) => {
+
+
+  const le_bytes = numberToLEBytes8(type_no)
+
+  const acc = PublicKey.findProgramAddressSync([Buffer.from("feetype"),le_bytes],raffle_program)[0]
+
+  const account = await connection.getAccountInfo(acc);
+
+  const account_data = deserialize_fee_and_reward_type_account_data(account!)
+  
+  return new PublicKey(account_data.mint);
 }
 

@@ -1,328 +1,170 @@
 
-
-export  class Raffle{
-
-    raffle_state:number = 0;
-    initializer:number[] = Array.from({length: 32}, () => 1);
-    token_mint:number[] = Array.from({length: 32}, () => 1);
-    winner_address:number[] = Array.from({length: 32}, () => 1);
-    raffle_name:number[] = Array.from({length: 32}, () => 1);
-    raffle_no:bigint = BigInt(0);
-    current_number_of_participants:bigint = BigInt(0);
-    participants_required:bigint = BigInt(0);
-    winner_no:bigint = BigInt(0);
-    participation_fee:bigint = BigInt(0);
-    prize_amount:bigint = BigInt(0);
-    decimals:number = 0;
-    expiration_time:bigint = BigInt(0);
-
-    constructor(fields: {
-
-      raffle_state:number;
-      initializer:number[];
-      token_mint:number[];
-      winner_address:number[];
-      raffle_name:number[];
-      raffle_no:bigint;
-      current_number_of_participants:bigint;
-      participants_required:bigint;
-      winner_no:bigint;
-      participation_fee:bigint;
-      prize_amount:bigint;
-      decimals:number;
-      expiration_time:bigint;
-    
   
-     } | undefined = undefined)
-      {if (fields) {
-        this.raffle_state = fields.raffle_state;
-        this.initializer = fields.initializer;
-        this.token_mint = fields.token_mint;
-        this.winner_address = fields.winner_address;
-        this.raffle_name = fields.raffle_name;
-        this.raffle_no = fields.raffle_no;
-        this.current_number_of_participants = fields.current_number_of_participants;
-        this.participants_required = fields.participants_required;
-        this.winner_no = fields.winner_no;
-        this.participation_fee = fields.participation_fee;
-        this.prize_amount = fields.prize_amount;
-        this.decimals = fields.decimals;
-        this.expiration_time = fields.expiration_time;
-
-      }
-    }
+  export interface Raffle {
+  raffle_state: number; // u8
+  is_unlimited_participant_allowed: number; // u8
+  multiple_participation_allowed: number; // u8
+  initializer: number[]; // u8[32]
+  reward_mint: number[]; // u8[32]
+  raffle_name: number[]; // u8[32]
+  raffle_no: bigint; // u64
+  current_number_of_participants: bigint; // u64
+  participants_required: bigint; // u64
+  participation_fee: bigint; // u64
+  participation_fee_mint: number[]; // u8[32]
+  participation_fee_type: bigint; // u64
+  rewards: bigint[]; // Vec<u64>
+  winners: bigint[]; // Vec<u64>
+  requirement_to_participate: number; // u8
+  requirement_amount_token: bigint; // u64
+  requirement_nft_mint: number[]; // u8[32]
+  reward_decimals: number; // u8
+  participation_fee_decimals: number; // u8
+  raffle_time: bigint; // u64
+  winner_count: bigint; // u64
+  current_winner_count: bigint; // u64
+  number_of_entitled_winners: bigint; // u64
   }
-export  const RaffleSchema =new Map([
-    [
-      Raffle,
-      {
-        kind: "struct",
-        fields: [
-          ["raffle_state","u8"],
-          ["initializer",["u8",32]],
-          ["token_mint",["u8",32]],
-          ["winner_address",["u8",32]],
-          ["raffle_name",["u8",32]],
-          ["raffle_no","u64"],
-          ["current_number_of_participants","u64"],
-          ["participants_required","u64"],
-          ["winner_no","u64"],
-          ["participation_fee","u64"],
-          ["prize_amount","u64"],
-          ["decimals","u8"],
-          ["expiration_time","u64"],
-        ],
-      },
-    ],
-  ])
-
-  export  class Counter{
-
-    initialized:number = 0;
-    number_of_raffles:bigint = BigInt(0);
-
-
-    constructor(fields: {
-
-      initialized:number;
-      number_of_raffles:bigint;
-    
-  
-     } | undefined = undefined)
-      {if (fields) {
-        this.initialized = fields.initialized;
-        this.number_of_raffles = fields.number_of_raffles;
-
-
-      }
-    }
-  }
-  export  const CounterSchema =new Map([
-    [
-      Counter,
-      {
-        kind: "struct",
-        fields: [
-          ["initialized","u8"],
-          ["number_of_raffles","u64"],
-
-    ],
+  export const RaffleSchema = {
+  struct: {
+    raffle_state: 'u8',
+    is_unlimited_participant_allowed: 'u8',
+    multiple_participation_allowed: 'u8',
+    'initializer': { array: { type: 'u8', length: 32 } },
+    'reward_mint': { array: { type: 'u8', length: 32 } },
+    'raffle_name': { array: { type: 'u8', length: 32 } },
+    raffle_no: 'u64',
+    current_number_of_participants: 'u64',
+    participants_required: 'u64',
+    participation_fee: 'u64',
+    'participation_fee_mint': { array: { type: 'u8', length: 32 } },
+    participation_fee_type: 'u64',
+    'rewards': { array: { type: 'u64' } },
+    'winners': { array: { type: 'u64' } },
+    requirement_to_participate: 'u8',
+    requirement_amount_token: 'u64',
+    'requirement_nft_mint': { array: { type: 'u8', length: 32 } },
+    reward_decimals: 'u8',
+    participation_fee_decimals: 'u8',
+    raffle_time: 'u64',
+    winner_count: 'u64',
+    current_winner_count: 'u64',
+    number_of_entitled_winners: 'u64',
   },
-  ],
-  ])
-
-  export  class RaffleName{
-
-
-    raffle_name:number[] = Array.from({length: 32}, () => 1);
-
-    constructor(fields: {
-
-
-        raffle_name:number[];
-    
+  };
   
-     } | undefined = undefined)
-      {if (fields) {
-
-        this.raffle_name = fields.raffle_name;
-
-      }
-    }
+  export interface Participant {
+  particpant_address: number[]; // u8[32]
+  particpant_no: bigint; // u64
+  raffle_no: bigint; // u64
+  entitled: number; // u8
+  prize_claimed: number; // u8
+  index_in_winners: bigint; // u64
   }
-export  const RaffleNameSchema =new Map([
-    [
-      RaffleName,
-      {
-        kind: "struct",
-        fields: [
-
-          ["raffle_name",["u8",32]],
-    ],
+  export const ParticipantSchema = {
+  struct: {
+    particpant_address: { array: { type: 'u8', length: 32 } },
+    particpant_no: 'u64',
+    raffle_no: 'u64',
+    entitled: 'u8',
+    prize_claimed: 'u8',
+    index_in_winners: 'u64',
   },
-  ],
-  ])
-
-export  class Participation{
-
-    particpant_address:number[] = Array.from({length: 32}, () => 1);
-    particpant_no:bigint = BigInt(0);
-    raffle_no:bigint = BigInt(0);
-
-    constructor(fields: {
-
-      particpant_address:number[];
-      particpant_no:bigint;
-      raffle_no:bigint;
-
+  };
   
-     } | undefined = undefined)
-      {if (fields) {
-        this.particpant_address = fields.particpant_address;
-        this.particpant_no = fields.particpant_no;
-        this.raffle_no = fields.raffle_no;
-
-      }
-    }
+  export interface Term {
+  initialized: number; // u8
+  fee_percent: bigint; // u64
+  expiration_time: bigint; // u64
+  maximum_winner_count: bigint; // u64
   }
-export  const ParticipationSchema =new Map([
-    [
-      Participation,
-      {
-        kind: "struct",
-        fields: [
-          ["particpant_address",["u8",32]],
-          ["particpant_no","u64"],
-          ["raffle_no","u64"],
-    ],
+  export const TermSchema = {
+  struct: {
+    initialized: 'u8',
+    fee_percent: 'u64',
+    expiration_time: 'u64',
+    maximum_winner_count: 'u64',
   },
-  ],
-  ])
-
-  export   class InitPda{
-    bump:number = 0;
-    lamports:number = 0
-    no:number = 0;
-    constructor(fields: {
-      bump:number;
-      lamports:number;
-      no:number;
-     } | undefined = undefined)
-      {if (fields) {
-        this.lamports = fields.lamports;
-        this.bump = fields.bump;
-        this.no = fields.no;
-      }
-    }
+  };
+  
+  export interface Config {
+  authority_1: number[]; // u8[32]
+  authority_2: number[]; // u8[32]
+  authority_3: number[]; // u8[32]
+  authority_4: number[]; // u8[32]
   }
-  export   const InitPdaSchema =new Map([
-    [
-      InitPda,
-      {
-        kind: "struct",
-        fields: [
-          ["bump","u8"],
-          ["lamports","u64"],
-          ["no","u8"],
-    ],
+  export const ConfigSchema = {
+  struct: {
+    'authority_1': { array: { type: 'u8', length: 32 } },
+    'authority_2': { array: { type: 'u8', length: 32 } },
+    'authority_3': { array: { type: 'u8', length: 32 } },
+    'authority_4': { array: { type: 'u8', length: 32 } },
   },
-  ],
-  ])
-  
-  export  class Config{
-  
-    authority1:number[] = Array.from({ length: 32 }, () => 1);
-    authority2:number[] = Array.from({ length: 32 }, () => 1);
-    authority3:number[] = Array.from({ length: 32 }, () => 1);
-    authority4:number[] = Array.from({ length: 32 }, () => 1);
-  
-    constructor(fields: {
-      authority1:number[];
-      authority2:number[];
-      authority3:number[];
-      authority4:number[];
-  
-     } | undefined = undefined)
-      {if (fields) {
-        this.authority1 = fields.authority1;
-        this.authority2 = fields.authority2;
-        this.authority3 = fields.authority3;
-        this.authority4 = fields.authority4;
-  
-      }
-    }
+  };
+
+  export const InitRaffleSchema = { 
+    struct: { 
+      is_unlimited_participant_allowed:'u8',
+      'raffle_name':{ array: { type: 'u8',length:32 }},
+      participation_fee:'u64',
+      participants_required:'u64',
+      raffle_time:'u64',
+      multiple_participation_allowed:'u8',
+      participation_fee_type:'u64',
+      reward_type:'u64',
+      'rewards':{ array: { type: 'u64' }},
+      requirement_to_participate:'u8',
+      requirement_amount_token:'u64',
+      requirement_nft_mint:{ array: { type: 'u8',length:32 }},
+      'winner_count':{ array: { type: 'u64' }}
   }
-  export  const ConfigSchema =new Map([
-    [
-      Config,
-      {
-        kind: "struct",
-        fields: [
-          ["authority1",["u8",32]],
-          ["authority2",["u8",32]],
-          ["authority3",["u8",32]],
-          ["authority4",["u8",32]],
-    ],
+  };
+  export interface InitRaffle {
+    is_unlimited_participant_allowed: number; // u8
+    raffle_name: number[]; // u8[32]
+    participation_fee: bigint; // u64
+    participants_required: bigint; // u64
+    raffle_time: bigint; // u64
+    multiple_participation_allowed: number; // u8
+    participation_fee_type: bigint; // u64
+    reward_type: bigint; // u64
+    rewards: bigint[]; // u64[]
+    requirement_to_participate: number; // u8
+    requirement_amount_token: bigint; // u64
+    requirement_nft_mint: number[]; // u8[32]
+    winner_count: bigint[]; // u64[]
+  }
+
+  export const CounterSchema = { 
+    struct: { 
+    initialized: 'u8', 
+    number_of_raffles: 'u64', 
+  }
+  };
+  export interface Counter  { 
+    initialized: number, 
+    number_of_raffles: bigint, 
+  }
+
+  
+  export interface RewardFeeType {
+  mint: number[]; // u8[32]
+  decimals: number; // u8
+  no: bigint; // u64
+  }
+  export const RewardFeeTypeSchema = {
+  struct: {
+    'mint': { array: { type: 'u8', length: 32 } },
+    decimals: 'u8',
+    no: 'u64',
   },
-  ],
-  ])
-    
-  export  class Terms{
-  
-    init:number = 0;
-    fee:bigint = BigInt(0);
-    expiration_time:bigint = BigInt(0);
-    constructor(fields: {
-      init:number;
-      fee:bigint;
-      expiration_time:bigint;
-     } | undefined = undefined)
-      {if (fields) {
-  
-        this.fee = fields.fee;
-        this.init = fields.init;
-        this.expiration_time = fields.expiration_time;
-      }
-    }
-  }
-  export  const TermsSchema =new Map([
-    [
-        Terms,
-      {
-        kind: "struct",
-        fields: [
-          ["init","u8"],
-          ["fee","u64"],
-          ["expiration_time","u64"],
-    ],
-  },
-  ],
-  ])
-  
+  };
 
-  export  class InitRaffle{
-
-    raffle_name:number[] = Array.from({length: 32}, () => 1);
-    participation_fee:bigint = BigInt(0);
-    prize_amount:bigint = BigInt(0);
-    participants_required:bigint = BigInt(0);
-    decimals:number = 0;
-
-
-    constructor(fields: {
-    
-      raffle_name:number[];
-      participation_fee:bigint;
-      prize_amount:bigint;
-      participants_required:bigint;
-      decimals:number;
-
-  
-     } | undefined = undefined)
-      {if (fields) {
-
-        this.raffle_name = fields.raffle_name;
-        this.participation_fee = fields.participation_fee;
-        this.prize_amount = fields.prize_amount;
-        this.participants_required = fields.participants_required;
-        this.decimals = fields.decimals;
-
-      }
-    }
-  }
-  export  const InitRaffleSchema =new Map([
-    [
-      InitRaffle,
-      {
-        kind: "struct",
-        fields: [
-          ["raffle_name",["u8",32]],
-          ["participation_fee","u64"],
-          ["prize_amount","u64"],
-          ["participants_required","u64"],
-          ["decimals","u8"],
-        ],
-      },
-    ],
-  ])
-
+  export interface RaffleNameData {
+    raffle_name: number[]; // u8[32]
+  }  
+  export const RaffleNameSchema = {
+    struct: {
+      'raffle_name': { array: { type: 'u8', length: 32 } },
+    },
+  };
