@@ -23,3 +23,9 @@ Cargo.lock
 /node_modules
 
 .DS_Store
+
+.env
+
+tests.ts
+
+tests_token

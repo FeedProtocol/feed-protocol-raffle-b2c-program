@@ -1,4 +1,4 @@
-use crate::{error::RaffleProgramError::InvalidInstruction, state::{ InitRaffle, RandomNumber, RewardFeeType, Term}};
+use crate::{error::RaffleProgramError::InvalidInstruction, state::{ InitRaffle, RandomNumber, RewardFeeType, Rewards, Term}};
 use borsh::BorshDeserialize;
 use solana_program::program_error::ProgramError;
 
@@ -20,7 +20,9 @@ pub enum RaffleProgramInstruction {
     InitFeeCollector,
     InitFeeType{data:RewardFeeType},
     InitRewType{data:RewardFeeType},
-    CollectFeeToken
+    CollectFeeToken,
+    AddTokenPool{rewards:Rewards},
+    AddSolPool{rewards:Rewards},
 }
 
 impl RaffleProgramInstruction {
@@ -55,7 +57,12 @@ impl RaffleProgramInstruction {
       40 => Self::InitFeeCollector,
       100 => Self::ClaimPrize,
       200 => Self::CollectFeeInitializer,
-
+      210 => Self::AddSolPool {
+        rewards:Rewards::try_from_slice(&rest)?
+      },
+      220 => Self::AddTokenPool{
+        rewards:Rewards::try_from_slice(&rest)?
+      },
 
       _ => return Err(InvalidInstruction.into()),
     })

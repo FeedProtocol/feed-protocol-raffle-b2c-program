@@ -1,16 +1,14 @@
-use crate::{instruction::RaffleProgramInstruction, state::{ Config, FeeCollector, InitRaffle, Participant, Raffle, RaffleCounter, RandomNumber, RewardFeeType, Term}};
+use crate::{instruction::RaffleProgramInstruction, state::{ Config, FeeCollector, InitRaffle, Participant, Raffle, RaffleCounter, RandomNumber, RewardFeeType, Rewards, Term}};
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::{
-    account_info::{next_account_info, AccountInfo},  entrypoint::ProgramResult,
-     instruction::{AccountMeta, Instruction}, msg, program::{get_return_data, invoke, invoke_signed},
-      pubkey::Pubkey, rent::Rent, system_instruction,   sysvar::{clock::Clock, Sysvar,},
+    account_info::{next_account_info, AccountInfo}, entrypoint::ProgramResult, instruction::{AccountMeta, Instruction}, msg, program::{get_return_data, invoke, invoke_signed}, pubkey::Pubkey, rent::Rent, system_instruction, system_program, sysvar::{clock::Clock, Sysvar,}
 };
 
 use solana_program::program_pack::Pack;
 use spl_token::state::{Account, Mint};
 
 
-use crate::error::RaffleProgramError::{InvalidCounter, ArithmeticError, InvalidInitializer, WritableAccount,
+use crate::error::RaffleProgramError::{InvalidCounter, ArithmeticError, InvalidInitializer, WritableAccount,InvalidMint,
      ParticipantNotSigner, MaxNumberReached, InvalidWinner, InvalidFee,  InvalidRaffleState,InvalidRewardType,
      InitializerNotSigner, InvalidWinnerPDA,InvalidRaffleNo, InvalidParticipantPDA,InvalidFeeType,RNGProgramError,
     InvalidConfig, NotSignerAuth,  InvalidAuth,  InvalidRaffle, InvalidTerms, InvalidRaffleTime,InvalidWinnerNumber,
@@ -80,6 +78,13 @@ impl Processor {
             RaffleProgramInstruction::InitFeeCollector => {
                 Self::init_fee_collector_account(accounts, program_id)
             },
+            RaffleProgramInstruction::AddSolPool { rewards } => {
+                Self::add_solana_to_the_reward_pool(accounts, program_id,rewards)
+            },
+            RaffleProgramInstruction::AddTokenPool { rewards } => {
+                Self::add_tokens_to_the_reward_pool(accounts, program_id,rewards)
+            },
+
         }
     }
 
@@ -94,13 +99,16 @@ impl Processor {
        let initializer: &AccountInfo<'_> = next_account_info(accounts_iter)?;
        let initializer_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
        let raffle_pda: &AccountInfo<'_> = next_account_info(accounts_iter)?;
-       let raffle_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+       let raffle_reward_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+       let raffle_fee_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
        let counter_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
        let term_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
        let reward_type_pda: &AccountInfo<'_> = next_account_info(accounts_iter)?;
        let fee_type_pda: &AccountInfo<'_> = next_account_info(accounts_iter)?;
        let reward_mint: &AccountInfo<'_> = next_account_info(accounts_iter)?;
-       let token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+       let reward_mint_token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+       let fee_mint: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+       let fee_mint_token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
        let sysvar: &AccountInfo<'_> = next_account_info(accounts_iter)?;
 
 
@@ -117,18 +125,63 @@ impl Processor {
 
        Self::check_accounts_init_raffle(&counter,&terms,initializer,term_account,counter_account,reward_type_pda,fee_type_pda,program_id)?;
 
-       Self::create_raffle_pda(initializer,raffle_pda,program_id,&counter.number_of_raffles)?;
-
-       Self::create_raffle_ata(initializer,raffle_pda,raffle_ata,reward_mint,token_program,sysvar)?;
-
        let mut total_rewards:u64 = 0;
-       Self::check_participation_reward_type_and_sum(program_id,&reward_type,&init_raffle.rewards,reward_type_pda.key,&mut total_rewards)?;
+       let mut participation_fee_total:u64 = 0;
+       Self::check_participation_reward_type_and_sum(program_id,&reward_type,&init_raffle.rewards,&init_raffle.transfer_fee_to_pool,reward_type_pda.key,&mut total_rewards,&mut participation_fee_total,init_raffle.participation_fee)?;
+       {
+       msg!("{}",total_rewards);
+       msg!("{}",participation_fee_total);
+       }
 
        Self::check_participation_fee_type(program_id,&fee_type,fee_type_pda.key)?;
+       msg!("5");
 
-       Self::transfer_reward_to_raffle_pda(reward_mint,raffle_ata,initializer,initializer_ata,token_program,reward_type.decimals,total_rewards)?;
+       Self::check_and_write_raffle_data(&init_raffle,&terms,reward_type.mint,fee_type.mint,reward_type.decimals,fee_type.decimals,counter.number_of_raffles,raffle_pda, initializer, program_id)?;
 
-       Self::check_and_write_raffle_data(&init_raffle,&terms,initializer.key,reward_type.mint,fee_type.mint,reward_type.decimals,fee_type.decimals,counter.number_of_raffles,raffle_pda)?;
+       msg!("reward_type {}",init_raffle.reward_type);
+       msg!("participation_fee_type {}",init_raffle.participation_fee_type);
+
+       if init_raffle.reward_type != 1 {
+
+        Self::create_ata(initializer,raffle_pda,raffle_reward_ata,reward_mint,reward_mint_token_program,sysvar)?;
+       }
+       msg!("7");
+
+       if init_raffle.participation_fee_type != 1 {
+        if reward_type.mint != fee_type.mint {
+            Self::create_ata(initializer,raffle_pda,raffle_fee_ata,fee_mint,fee_mint_token_program,sysvar)?;
+        }
+       }
+       msg!("8");
+
+
+       if reward_type.no == 1 {
+
+            let ix = system_instruction::transfer(initializer.key, raffle_pda.key, total_rewards);
+
+            invoke(&ix, &[initializer.clone(),raffle_pda.clone()])?;
+        
+       }else{
+
+            Self::transfer_tokens_to_raffle_pda(reward_mint,raffle_reward_ata,initializer,initializer_ata,reward_mint_token_program,reward_type.decimals,total_rewards)?;
+       }
+
+       if init_raffle.requirement_to_participate == 1 {
+
+            let raffle_reqired_token_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+            let required_token_mint: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+            let required_mint_token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+
+
+            msg!("requirement_mint {:?}",Pubkey::new_from_array(init_raffle.requirement_mint).to_string());
+            msg!("required_token_mint {:?}",required_token_mint.key.to_string());
+
+            if init_raffle.requirement_mint != required_token_mint.key.to_bytes() {return Err(InvalidMint.into())}
+
+
+            Self::create_ata(initializer,raffle_pda,raffle_reqired_token_ata,required_token_mint,required_mint_token_program,sysvar)?;
+
+       }
 
 
         counter.serialize(&mut &mut counter_account.data.borrow_mut()[..])?;
@@ -150,7 +203,6 @@ impl Processor {
 
         if raffle_pda.owner != program_id {return Err(InvalidRaffle.into());}
         if !participant.is_signer {return Err(ParticipantNotSigner.into());}
-        if participation_fee_mint.owner != &spl_token::id() && participation_fee_mint.owner != &spl_token_2022::id(){panic!()}
 
         let mut raffle: Raffle = Raffle::try_from_slice(&raffle_pda.data.borrow())?;
 
@@ -165,29 +217,78 @@ impl Processor {
         let clock: Clock= Clock::get()?;
         let current_time: u64 = clock.unix_timestamp as u64;
 
-        if raffle.raffle_time < current_time {return Err(InvalidRaffleTime.into())}
 
+        //user cant join raffle after raffle time is passed
+        if current_time > raffle.raffle_time {return Err(InvalidRaffleTime.into())}
 
         raffle.current_number_of_participants = raffle.current_number_of_participants.checked_add(1).ok_or(ArithmeticError)?;
+        msg!("3");
 
 
         Self::init_participant_pda(participant, participant_pda, raffle.multiple_participation_allowed, raffle.raffle_no, raffle.current_number_of_participants, program_id)?;
 
         let fee:u64 = raffle.participation_fee;
         if raffle.participation_fee_type == 1 {
-            Self::transfer_participation_fee_solana(participant, raffle_pda, fee)?;
+
+            invoke(&system_instruction::transfer(
+                participant.key,
+                raffle_pda.key, 
+                fee), 
+                &[participant.clone(),raffle_pda.clone()])?;
+
+
         }else{
 
            let participant_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
            let raffle_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
            let token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
 
+
+           if participation_fee_mint.owner != &spl_token::id() && participation_fee_mint.owner != &spl_token_2022::id(){return Err(InvalidMint.into());}
+
            Self::check_mint_and_owner(participation_fee_mint.key, participant.key, participant_ata)?;
            Self::check_mint_and_owner(participation_fee_mint.key, raffle_pda.key, raffle_ata)?;
 
-           Self::transfer_participation_fee_token(token_program, participant, participant_ata, raffle_ata, participation_fee_mint, fee, raffle.participation_fee_decimals)?;
+           msg!("participation_fee_type{}",raffle.participation_fee_type);
+           msg!("participation_fee_decimals{}",raffle.participation_fee_decimals);
+           msg!("participation_fee_mint {}",Pubkey::new_from_array(raffle.participation_fee_mint).to_string());
+
+           Self::transfer_tokens_to_raffle_pda(participation_fee_mint, raffle_ata, participant, participant_ata, 
+            token_program, raffle.participation_fee_decimals, fee)?;
         }
 
+
+        //if required to have tokens transfer them to raffle_ata
+        if raffle.requirement_to_participate == 1 {
+
+            let requirement_mint: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+            let participant_requirement_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+            let raffle_requirement_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+            let req_mint_token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+
+            if raffle.requirement_mint != requirement_mint.key.to_bytes(){return Err(InvalidMint.into());}
+
+
+           msg!("required_token_decimals{}",raffle.required_token_decimals);
+           msg!("requirement_mint {}",requirement_mint.key.to_string());
+
+            Self::check_mint_and_owner_and_amount(&Pubkey::new_from_array(raffle.requirement_mint), participant.key, participant_requirement_ata, raffle.requirement_amount_token)?;
+        
+            Self::transfer_tokens_to_raffle_pda(requirement_mint, raffle_requirement_ata, participant, participant_requirement_ata, req_mint_token_program, raffle.required_token_decimals, raffle.requirement_amount_token)?;
+        
+        }
+
+
+        if raffle.is_increasing_pool == 1 {
+
+            for i in 0..raffle.rewards.len() {
+                raffle.rewards[i] = raffle.rewards[i].checked_add(raffle.transfer_fee_to_pool[i]).ok_or(ArithmeticError)?;
+            }
+
+        }
+
+
+        msg!("6");
         let participant: Participant = Participant{
             particpant_address: participant.key.to_bytes(),
             particpant_no: raffle.current_number_of_participants,
@@ -197,8 +298,9 @@ impl Processor {
             index_in_winners: 0,
         };
 
-
+        msg!("7");
         raffle.serialize(&mut &mut raffle_pda.data.borrow_mut()[..])?;
+        msg!("8");
         participant.serialize(&mut &mut participant_pda.data.borrow_mut()[..])?;
 
 
@@ -232,37 +334,54 @@ impl Processor {
 
         let clock: Clock= Clock::get()?;
         let current_time: u64 = clock.unix_timestamp as u64;
-
-        msg!("1");
+{
+        msg!("current_number_of_participants = {}",raffle.current_number_of_participants);
+        msg!("participants_required = {}",raffle.participants_required);
+        msg!("current_winner_count = {}",raffle.current_winner_count);
+        msg!("winner_count = {}",raffle.winner_count);
+        msg!("raffle_state = {}",raffle.raffle_state);
+}
         if raffle.raffle_state != 1{return Err(InvalidRaffleState.into());}
 
         if raffle.is_unlimited_participant_allowed == 1 {
-           if raffle.raffle_time < current_time {return Err(InvalidRaffleState.into());}
+            msg!("2");
+ 
+         //if current time is bigger than raffle time it is raffle time
+           //if current_time < raffle.raffle_time {return Err(InvalidRaffleState.into());}
         }else{
-           if raffle.current_number_of_participants != raffle.participants_required && raffle.raffle_time < current_time {return Err(InvalidRaffleState.into());}
+            msg!("3");
+
+           if raffle.current_number_of_participants != raffle.participants_required && current_time < raffle.raffle_time {
+        msg!("4");
+        return Err(InvalidRaffleState.into());}
         }
 
 
         let mut attempts:u64 = 0;
 
         let mut winners: Vec<u64> = raffle.winners.clone();
+        winners.retain(|&x| x != 0);
 
         if raffle.current_number_of_participants == 0 {
 
-        let initializer: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+            msg!("abort raffle");
+
         let initializer_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
         let raffle_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
         let reward_mint: &AccountInfo<'_> = next_account_info(accounts_iter)?;
         let token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
 
-        let total_rewards = raffle.rewards.iter().sum();
+        let total_rewards: u64 = raffle.rewards.iter().sum();
 
-            Self::abort_raffle(initializer,initializer_ata,raffle_pda,raffle_ata,reward_mint,token_program,total_rewards,raffle.reward_decimals)?;
+            Self::abort_raffle(initializer_ata,raffle_pda,raffle_ata,reward_mint,token_program,total_rewards,raffle.raffle_no,raffle.reward_decimals,raffle.bump)?;
             raffle.raffle_state = 3;
 
         }else if raffle.current_number_of_participants == 1  {
+
             let winner_no:u64 = 1;
             winners.push(winner_no);
+            raffle.raffle_state = 2;
+            raffle.current_winner_count = 1;
 
         }else{
             let count:u64;
@@ -289,8 +408,7 @@ impl Processor {
                     raffle.current_winner_count = raffle.current_winner_count.checked_add(1).ok_or(ArithmeticError)?;
 
                 }
-                
-    
+
     
                 attempts += 1;
             }
@@ -299,8 +417,11 @@ impl Processor {
                 raffle.raffle_state = 2;
             }
         }
+        let n: usize = raffle.winner_count as usize;
+        winners.resize(n, 0);
 
 
+        raffle.winners = winners;
         raffle.serialize(&mut &mut raffle_pda.data.borrow_mut()[..])?;
 
 
@@ -337,15 +458,19 @@ impl Processor {
             if winner_pda.owner != program_id {return Err(InvalidWinnerPDA.into());}
 
             if raffle.raffle_no != participant.raffle_no{return Err(InvalidRaffleNo.into());}
+            msg!("raffle no match");
 
             if participant.entitled != 0 {return Err(InvalidParticipantPDA.into());}
-
+            msg!("entitled");
             if !raffle.winners.contains(&participant.particpant_no){return Err(InvalidParticipantPDA.into());}
+            msg!("contains");
 
             let index = raffle.winners.iter().position(|&x| x == participant.particpant_no).unwrap();
 
             participant.entitled = 1;
             participant.index_in_winners = index as u64;
+
+            raffle.number_of_entitled_winners = raffle.number_of_entitled_winners.checked_add(1).ok_or(ArithmeticError)?;
 
             participant.serialize(&mut &mut winner_pda.data.borrow_mut()[..])?;
 
@@ -375,6 +500,7 @@ impl Processor {
         accounts: &[AccountInfo],program_id: &Pubkey
     ) -> ProgramResult{
 
+
         let accounts_iter: &mut std::slice::Iter<'_, AccountInfo<'_>> = &mut accounts.iter();
 
         let raffle_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
@@ -387,76 +513,72 @@ impl Processor {
         let sysvar: &AccountInfo<'_> = next_account_info(accounts_iter)?;
 
 
-        let mut raffle: Raffle = Raffle::try_from_slice(&raffle_account.data.borrow())?;
+        let raffle: Raffle = Raffle::try_from_slice(&raffle_account.data.borrow())?;
         let mut participant: Participant = Participant::try_from_slice(&winner_pda.data.borrow())?;
 
 
         if raffle_account.owner != program_id {return Err(InvalidRaffle.into());}
         if winner_pda.owner != program_id {return Err(InvalidWinnerPDA.into());}
-
-        if participant.entitled != 1 {return Err(InvalidParticipantPDA.into());}
-        if participant.prize_claimed != 0 {return Err(InvalidParticipantPDA.into());}
-
         if raffle.raffle_no != participant.raffle_no{return Err(InvalidRaffleNo.into());}
         if winner_address.key.to_bytes() != participant.particpant_address {return Err(InvalidWinner.into());}
-        if reward_mint.key.to_bytes() != raffle.reward_mint {return Err(InvalidWinner.into());}
-
         if raffle.raffle_state != 3{return Err(InvalidRaffleState.into());}
-
-        if winner_ata.owner!=&spl_token::id() && winner_ata.owner!=&spl_token_2022::id(){
-
-            let create_winner_ata: solana_program::instruction::Instruction = create_associated_token_account(
-                winner_address.key,
-                winner_address.key, 
-              reward_mint.key, 
-              token_program_id.key);
-
-            invoke(&create_winner_ata,
-                &[winner_address.clone(),winner_ata.clone(),reward_mint.clone(),token_program_id.clone(),sysvar.clone()])?;
-
-        }else{
-            let ata_unpacked: Account  = Account::unpack_from_slice(&winner_ata.data.borrow())?;
-
-            if reward_mint.key != &ata_unpacked.mint {panic!()}
-            if winner_address.key != &ata_unpacked.owner {panic!()}
-
-            Self::check_mint_and_owner(reward_mint.key,winner_address.key,winner_ata)?;
-          }
-
-
-        let index = raffle.winners.iter().position(|&x| x == participant.particpant_no).unwrap();
-
-        let prize_amount:u64 = raffle.rewards[index];
+        if participant.prize_claimed != 0 {return Err(InvalidParticipantPDA.into());}
 
 
 
-       let (raffle_account_address, bump) = 
-       Pubkey::find_program_address(&[b"raffle", &raffle.raffle_no.to_le_bytes()], program_id);
 
-        let transfer_token_ix = spl_token::instruction::transfer_checked(
-            &token_program_id.key,
-            &raffle_account_ata.key, 
-            &reward_mint.key, 
-            &winner_ata.key, 
-            &raffle_account_address, 
-            &[],prize_amount,raffle.reward_decimals)?;
+        if raffle.requirement_to_participate == 1{
 
-        invoke_signed(
-        &transfer_token_ix, 
-        &[
-            token_program_id.clone(),
-            raffle_account_ata.clone(),
-            reward_mint.clone(),
-            winner_ata.clone(),
-            raffle_account.clone()],
-            &[&[b"raffle", &raffle.raffle_no.to_le_bytes(), &[bump]]],
-        )?;
+            let raffle_req_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+            let participant_req_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+            let req_mint: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+            let req_mint_token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    
+            if raffle.requirement_mint != req_mint.key.to_bytes(){return Err(InvalidMint.into());}
+
+       
+            Self::transfer_tokens_from_raffle_pda(req_mint, raffle_req_ata, raffle_account, participant_req_ata,
+                          req_mint_token_program, raffle.required_token_decimals, raffle.requirement_amount_token,raffle.raffle_no,     raffle.bump)?;
+        }
+
+        if participant.entitled == 1 {
+                
+            if reward_mint.key.to_bytes() != raffle.reward_mint {return Err(InvalidWinner.into());}
+            let index = raffle.winners.iter().position(|&x| x == participant.particpant_no).unwrap();
+            let prize_amount:u64 = raffle.rewards[index];
+     
+
+            if raffle.reward_mint == system_program::ID.to_bytes() {
+
+                **raffle_account.try_borrow_mut_lamports()? -= prize_amount;
+                **winner_address.try_borrow_mut_lamports()? += prize_amount;
+
+        
+            }else{
+
+                if winner_ata.owner!=&spl_token::id() && winner_ata.owner!=&spl_token_2022::id(){
+
+                    Self::create_ata(winner_address, winner_address, winner_ata, reward_mint, token_program_id, sysvar)?;
+                   
+                }else{
+                
+                    let ata_unpacked: Account  = Account::unpack_from_slice(&winner_ata.data.borrow())?;
+        
+                    if reward_mint.key != &ata_unpacked.mint {panic!()}
+                    if winner_address.key != &ata_unpacked.owner {panic!()}
+        
+                    Self::check_mint_and_owner(reward_mint.key,winner_address.key,winner_ata)?;
+                }
+
+                Self::transfer_tokens_from_raffle_pda(reward_mint, raffle_account_ata, raffle_account, winner_ata, token_program_id, raffle.reward_decimals, prize_amount, raffle.raffle_no, raffle.bump)?;
+           }
+       }
+
+
 
 
         participant.prize_claimed = 1;
-        raffle.raffle_state = 4;
 
-        raffle.serialize(&mut &mut raffle_account.data.borrow_mut()[..])?;
         participant.serialize(&mut &mut winner_pda.data.borrow_mut()[..])?;
 
         Ok(())
@@ -474,32 +596,82 @@ impl Processor {
         let fee_collector_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
 
 
-        let  raffle: Raffle = Raffle::try_from_slice(&raffle_pda.data.borrow())?;
+        let  mut raffle: Raffle = Raffle::try_from_slice(&raffle_pda.data.borrow())?;
         let  terms: Term = Term::try_from_slice(&term_account.data.borrow())?;
         let  fee_collector: FeeCollector = FeeCollector::try_from_slice(&fee_collector_account.data.borrow())?;
 
-        if terms.initialized != 2 {return Err(InvalidFee.into());}
-        if fee_collector.initialized != 2 {return Err(InvalidFee.into());}
+        if terms.initialized != 2 {return Err(InvalidTerms.into());}
+        if fee_collector.initialized != 3 {return Err(InvalidFee.into());}
 
         if raffle_pda.owner != program_id {return Err(InvalidRaffle.into());}
         if term_account.owner != program_id {return Err(InvalidRaffle.into());}
         if fee_collector_account.owner != program_id {return Err(InvalidRaffle.into());}
 
         if raffle.raffle_state < 2{return Err(InvalidRaffleState.into());}
+        if raffle.fee_collected != 0{return Err(InvalidRaffleState.into());}
         if raffle.initializer != initializer.key.to_bytes() {return Err(InvalidInitializer.into());}
 
         if raffle.participation_fee_type == 1{
-            Self::send_fee_as_sol(raffle_pda, initializer, fee_collector_account, terms.fee_percent)?;
+
+
+            let data_len: usize = raffle_pda.data_len();
+            let rent: Rent = Rent::default();
+            let rent_amount: u64 = rent.minimum_balance(data_len);
+            let total_value: u64 = **raffle_pda.try_borrow_lamports()?;
+            let mut collected_value: u64 = total_value.checked_sub(rent_amount).ok_or(ArithmeticError)?;
+
+            if raffle.is_increasing_pool == 1 {
+                let total_rewards: u64 = raffle.rewards.iter().try_fold(0u64, |acc, &x| acc.checked_add(x).ok_or(ArithmeticError))?;
+                collected_value = collected_value.checked_sub(total_rewards).ok_or(ArithmeticError)?;
+            }else if raffle.participation_fee_mint == raffle.reward_mint{
+                let total_rewards: u64 = raffle.rewards.iter().try_fold(0u64, |acc, &x| acc.checked_add(x).ok_or(ArithmeticError))?;
+                collected_value = collected_value.checked_sub(total_rewards).ok_or(ArithmeticError)?;
+            }
+
+            let collected_value_div_by_100: u64 = collected_value.checked_div(100).ok_or(ArithmeticError)?;
+            let total_fee:u64 = collected_value_div_by_100.checked_mul(terms.fee_percent).ok_or(ArithmeticError)?;
+            let transfer_to_initializer: u64 = collected_value.checked_sub(total_fee).ok_or(ArithmeticError)?;
+
+
+            **raffle_pda.try_borrow_mut_lamports()? -= total_fee;
+            **raffle_pda.try_borrow_mut_lamports()? -= transfer_to_initializer;
+    
+            **fee_collector_account.try_borrow_mut_lamports()? += total_fee;
+            **initializer.try_borrow_mut_lamports()? += transfer_to_initializer;
+
         }else{
 
-        let fee_collector_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
-        let initializer_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
-        let raffle_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
-        let token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
-        let participation_fee_mint: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+            let fee_collector_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+            let initializer_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+            let raffle_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+            let token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+            let participation_fee_mint: &AccountInfo<'_> = next_account_info(accounts_iter)?;
 
-        Self::send_fee_as_token(fee_collector_ata, raffle_ata, raffle_pda, initializer_ata, token_program, participation_fee_mint, terms.fee_percent, raffle.raffle_no, raffle.participation_fee_decimals)?;
+            let raffle_ata_unpacked: spl_token::state::Account = Account::unpack_from_slice(&raffle_ata.data.borrow())?;
+            let mut collected_value: u64 = raffle_ata_unpacked.amount;
+
+            if raffle.is_increasing_pool == 1 {
+                let total_rewards: u64 = raffle.rewards.iter().try_fold(0u64, |acc, &x| acc.checked_add(x).ok_or(ArithmeticError))?;
+                collected_value = collected_value.checked_sub(total_rewards).ok_or(ArithmeticError)?;
+            }else if raffle.participation_fee_mint == raffle.reward_mint{
+                let total_rewards: u64 = raffle.rewards.iter().try_fold(0u64, |acc, &x| acc.checked_add(x).ok_or(ArithmeticError))?;
+                collected_value = collected_value.checked_sub(total_rewards).ok_or(ArithmeticError)?;
+            }
+
+            let collected_value_div_by_100: u64 = collected_value.checked_div(100).ok_or(ArithmeticError)?;
+            let total_fee:u64 = collected_value_div_by_100.checked_mul(terms.fee_percent).ok_or(ArithmeticError)?;
+            let transfer_to_initializer: u64 = collected_value.checked_sub(total_fee).ok_or(ArithmeticError)?;
+
+
+            Self::transfer_tokens_from_raffle_pda(participation_fee_mint, raffle_ata, raffle_pda, initializer_ata, token_program, raffle.participation_fee_decimals, transfer_to_initializer, raffle.raffle_no, raffle.bump)?;
+
+            Self::transfer_tokens_from_raffle_pda(participation_fee_mint, raffle_ata, raffle_pda, fee_collector_ata, token_program, raffle.participation_fee_decimals, total_fee, raffle.raffle_no, raffle.bump)?;
         }
+
+        raffle.fee_collected = 1;
+
+        raffle.serialize(&mut &mut raffle_pda.data.borrow_mut()[..])?;
+
 
         Ok(())
     }
@@ -821,25 +993,29 @@ impl Processor {
             program_id,
         );
 
+
     invoke_signed(
         &create_ix,
         &[authority.clone(), fee_type_account.clone()],
         &[&[b"feetype", &fee_type.no.to_le_bytes(), &[bump]]],
     )?;
 
-    let create_ata: solana_program::instruction::Instruction = create_associated_token_account(
-        authority.key,
-        fee_collector.key, 
-        token_mint.key, 
-        token_program.key);
-            
-    invoke(&create_ata,
-          &[authority.clone(),
-          fee_collector.clone(),
-          fee_collector_ata.clone(),
-          token_mint.clone(),
-          token_program.clone(),
-          sysvar.clone()])?;
+    if fee_type.no != 1{
+        let create_ata: solana_program::instruction::Instruction = create_associated_token_account(
+            authority.key,
+            fee_collector.key, 
+            token_mint.key, 
+            token_program.key);
+                
+        invoke(&create_ata,
+              &[authority.clone(),
+              fee_collector.clone(),
+              fee_collector_ata.clone(),
+              token_mint.clone(),
+              token_program.clone(),
+              sysvar.clone()])?;
+    }
+
 
 
     fee_type.serialize(&mut &mut fee_type_account.data.borrow_mut()[..])?;
@@ -1018,7 +1194,7 @@ impl Processor {
     let value: u64 = **fee_collector.lamports.borrow();
 
     let rent: Rent = Rent::default();
-    let rent_amount: u64 = rent.minimum_balance(232);
+    let rent_amount: u64 = rent.minimum_balance(1);
 
     let collected_fee: u64 = value.checked_sub(rent_amount).ok_or(ArithmeticError)?;
 
@@ -1028,6 +1204,84 @@ impl Processor {
     Ok(())
    }
     
+   fn add_solana_to_the_reward_pool(
+        accounts: &[AccountInfo],program_id: &Pubkey,amount:Rewards
+   ) -> ProgramResult{
+
+    let accounts_iter: &mut std::slice::Iter<'_, AccountInfo<'_>> = &mut accounts.iter();
+
+    let payer: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+    let raffle_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+
+    if raffle_account.owner != program_id {return Err(InvalidRaffle.into());}
+
+    let mut raffle: Raffle = Raffle::try_from_slice(&raffle_account.data.borrow())?;
+
+    if raffle.raffle_state != 1 {return Err(InvalidRaffleState.into());}
+
+    let total_rewards = amount.rewards.iter().try_fold(0u64, |acc, &x| acc.checked_add(x).ok_or(ArithmeticError))?;
+
+    invoke(&system_instruction::transfer(
+        payer.key,
+        raffle_account.key, 
+        total_rewards), 
+        &[payer.clone(),raffle_account.clone()])?;
+
+    if raffle.rewards.len() != amount.rewards.len() {return Err(ArithmeticError.into());}
+
+
+    for i in 0..amount.rewards.len() {
+
+        raffle.rewards[i] = raffle.rewards[i].checked_add(amount.rewards[i]).ok_or(ArithmeticError)?;
+
+    }
+
+
+    raffle.serialize(&mut &mut raffle_account.data.borrow_mut()[..])?;
+
+    Ok(())
+}
+
+   fn add_tokens_to_the_reward_pool(
+    accounts: &[AccountInfo],program_id: &Pubkey,amount:Rewards
+   ) -> ProgramResult{
+
+let accounts_iter: &mut std::slice::Iter<'_, AccountInfo<'_>> = &mut accounts.iter();
+
+let payer: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+let payer_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+let raffle_account: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+let raffle_ata: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+let reward_token_mint: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+let token_program: &AccountInfo<'_> = next_account_info(accounts_iter)?;
+
+if raffle_account.owner != program_id {return Err(InvalidRaffle.into());}
+
+let mut raffle: Raffle = Raffle::try_from_slice(&raffle_account.data.borrow())?;
+
+if raffle.raffle_state != 1 {return Err(InvalidRaffleState.into());}
+
+let total_rewards = amount.rewards.iter().try_fold(0u64, |acc, &x| acc.checked_add(x).ok_or(ArithmeticError))?;
+
+Self::transfer_tokens_to_raffle_pda(reward_token_mint, raffle_ata, payer, payer_ata, token_program, 
+    raffle.reward_decimals, total_rewards)?;
+
+if raffle.rewards.len() != amount.rewards.len() {return Err(ArithmeticError.into());}
+
+
+for i in 0..amount.rewards.len() {
+
+    raffle.rewards[i] = raffle.rewards[i].checked_add(amount.rewards[i]).ok_or(ArithmeticError)?;
+
+}
+
+
+raffle.serialize(&mut &mut raffle_account.data.borrow_mut()[..])?;
+
+Ok(())
+}
+
+
     fn check_authority(
         authority: &Pubkey, config: Config
     ) -> ProgramResult {
@@ -1057,10 +1311,14 @@ impl Processor {
         raffle_no:u64,participant_no:u64,program_id: &Pubkey
     ) -> ProgramResult {
 
+        msg!("init_participant_pda");
         let rent: Rent = Rent::default();
-        let rent_amount: u64 = rent.minimum_balance(232);
+        let rent_amount: u64 = rent.minimum_balance(58);
 
         if multiple_participation_allowed != 1 {
+
+        msg!("multiple_participation_allowed {}",multiple_participation_allowed);
+
             
             let (participant_pda_address, bump) = 
             Pubkey::find_program_address(
@@ -1078,7 +1336,7 @@ impl Processor {
                     participant.key,
                      &participant_pda_address,
                      rent_amount,
-                     232,
+                     58,
                      program_id,
                  ),
                  &[participant.clone(), participant_pda.clone()],
@@ -1101,15 +1359,16 @@ impl Processor {
                 b"par",
                 &participant_no.to_le_bytes()
                 ], program_id);
-
-
-             //raffle account created
+            {
+                msg!("derived_adress = {}",participant_pda_address.to_string());
+                msg!("derived_adress = {}",participant.key.to_string());
+            }
              invoke_signed(
                  &system_instruction::create_account(
                     participant.key,
                      &participant_pda_address,
                      rent_amount,
-                     232,
+                     58,
                      program_id,
                  ),
                  &[participant.clone(), participant_pda.clone()],
@@ -1125,7 +1384,7 @@ impl Processor {
 
 
 
-        let participant: Participant = Participant{
+        let data: Participant = Participant{
             particpant_address: participant.key.to_bytes(),
             particpant_no: participant_no,
             raffle_no,
@@ -1134,79 +1393,14 @@ impl Processor {
             index_in_winners: 0,
         };
 
+        {
+         msg!("data length = {}",participant_pda.data.borrow().len());
+        }
 
-        participant.serialize(&mut &mut participant_pda.data.borrow_mut()[..])?;
+        msg!("serializing");
+        data.serialize(&mut &mut participant_pda.data.borrow_mut()[..])?;
+        msg!("serializing succesful");
 
-        Ok(())
-    }
-    
-    fn transfer_participation_fee_solana<'a>(
-        participant:&AccountInfo<'a>,
-        raffle_pda:&AccountInfo<'a>,
-        fee:u64,
-    )-> ProgramResult{
-
-        invoke(&system_instruction::transfer(
-            participant.key,
-            raffle_pda.key, 
-            fee), 
-            &[participant.clone(),raffle_pda.clone()])?;
-
-        Ok(())
-    }
-    
-    fn transfer_participation_fee_token<'a>(
-        token_program:&AccountInfo<'a>,
-        participant:&AccountInfo<'a>,
-        participant_ata:&AccountInfo<'a>,
-        raffle_ata:&AccountInfo<'a>,
-        participation_fee_mint:&AccountInfo<'a>,
-        fee:u64,
-        decimals:u8,
-    )-> ProgramResult{
-
-
-        let transfer_token_ix = spl_token::instruction::transfer_checked(
-            &token_program.key,
-            &participant_ata.key, 
-            &participation_fee_mint.key, 
-            &raffle_ata.key, 
-            &participant.key, 
-            &[],fee,decimals)?;
-
-        invoke(
-        &transfer_token_ix, 
-        &[token_program.clone(),raffle_ata.clone(),participation_fee_mint.clone(),participant_ata.clone(),participant.clone()],
-        )?;
-
-
-        Ok(())
-    }
-    
-    fn transfer_reward_to_raffle_pda<'a>(
-        reward_mint:&AccountInfo<'a>,
-        raffle_ata:&AccountInfo<'a>,
-        initializer:&AccountInfo<'a>,
-        initializer_ata:&AccountInfo<'a>,
-        token_program:&AccountInfo<'a>,
-        decimals:u8,
-        total_rewards:u64,
-
-    )-> ProgramResult{
-
-
-        let transfer_token_ix = spl_token::instruction::transfer_checked(
-            &token_program.key,
-            &initializer_ata.key, 
-            &reward_mint.key, 
-            &raffle_ata.key, 
-            &initializer.key, 
-            &[],total_rewards,decimals)?;
-
-        invoke(
-        &transfer_token_ix, 
-        &[token_program.clone(),raffle_ata.clone(),reward_mint.clone(),initializer_ata.clone(),initializer.clone()],
-        )?;
 
         Ok(())
     }
@@ -1215,14 +1409,15 @@ impl Processor {
         initializer:&AccountInfo<'a>,
         raffle_pda:&AccountInfo<'a>,
         program_id: &Pubkey,
+        raffle_account_address:&Pubkey,
         raffle_no:&u64,
+        data_len:usize,
+        bump:u8
     )-> ProgramResult{
 
-        let (raffle_account_address, bump) = 
-        Pubkey::find_program_address(&[b"raffle", &raffle_no.to_le_bytes()], program_id);
  
          let rent: Rent = Rent::default();
-         let rent_amount: u64 = rent.minimum_balance(187);
+         let rent_amount: u64 = rent.minimum_balance(data_len);
  
          //raffle account created
          invoke_signed(
@@ -1230,7 +1425,7 @@ impl Processor {
                  initializer.key,
                  &raffle_account_address,
                  rent_amount,
-                 187,
+                 data_len as u64,
                  program_id,
              ),
              &[initializer.clone(), raffle_pda.clone()],
@@ -1240,33 +1435,39 @@ impl Processor {
 
         Ok(())
     }
-    
-    fn create_raffle_ata<'a>(
-        initializer:&AccountInfo<'a>,
-        raffle_pda:&AccountInfo<'a>,
-        raffle_ata:&AccountInfo<'a>,
-        token_mint:&AccountInfo<'a>,
+
+    fn create_ata<'a>(
+        payer:&AccountInfo<'a>,
+        wallet_address:&AccountInfo<'a>,
+        ata:&AccountInfo<'a>,
+        mint:&AccountInfo<'a>,
         token_program:&AccountInfo<'a>,
         sysvar:&AccountInfo<'a>,
     )-> ProgramResult{
+
+        msg!("{}",token_program.key.to_string());
+        msg!("{}",mint.key.to_string());
+        msg!("{}",ata.key.to_string());
+        msg!("{}",payer.key.to_string());
+        msg!("{}",wallet_address.key.to_string());
     
         let create_ata: solana_program::instruction::Instruction = create_associated_token_account(
-            initializer.key,
-            raffle_pda.key, 
-            token_mint.key, 
+            payer.key,
+            wallet_address.key, 
+            mint.key, 
             token_program.key);
                 
         invoke(&create_ata,
-              &[initializer.clone(),
-              raffle_ata.clone(),
-              raffle_pda.clone(),
-              token_mint.clone(),
+              &[payer.clone(),
+              ata.clone(),
+              wallet_address.clone(),
+              mint.clone(),
               token_program.clone(),
               sysvar.clone()])?;
         
         Ok(())
     }
-    
+
     fn check_participation_fee_type(
         program_id: &Pubkey,
         fee_type: &RewardFeeType,
@@ -1288,59 +1489,92 @@ impl Processor {
 
         Ok(())
     }
-    
+
     fn check_participation_reward_type_and_sum(
         program_id: &Pubkey,
         reward_type: &RewardFeeType,
         rewards: &Vec<u64>,
+        transfer_fee_to_pool:  &Vec<u64>,
         reward_type_pda: &Pubkey,
         total_rewards: &mut u64,
+        participation_fee_total: &mut u64,
+        participation_fee: u64
     ) -> ProgramResult {
+
         let (reward_type_pda_address, _bump) = Pubkey::find_program_address(
             &[b"rewtype", &reward_type.no.to_le_bytes()],
             program_id,
         );
-    
+
         if reward_type_pda != &reward_type_pda_address {
             return Err(InvalidRewardType.into());
         }
-    
-        *total_rewards = rewards
-            .iter()
-            .try_fold(0u64, |acc, &x| acc.checked_add(x).ok_or(ArithmeticError))?;
-    
+
+
+        *total_rewards = rewards.iter().try_fold(0u64, |acc, &x| acc.checked_add(x).ok_or(ArithmeticError))?;
+
+        *participation_fee_total = transfer_fee_to_pool.iter().try_fold(0u64, |acc, &x| acc.checked_add(x).ok_or(ArithmeticError))?;
+
+        *participation_fee_total = participation_fee_total.checked_add(participation_fee).ok_or(ArithmeticError)?;
+
         Ok(())
     }
-    
+
     fn check_and_write_raffle_data<'a>(
         init_raffle:&InitRaffle,
         terms:&Term,
-        initializer:&Pubkey,
         reward_mint:[u8;32],
         participation_fee_mint:[u8;32],
         reward_decimals:u8,
         participation_fee_decimals:u8,
         raffle_no:u64,
-        raffle_pda:&AccountInfo<'a>
-        
+        raffle_pda:&AccountInfo<'a>,
+        initializer:&AccountInfo<'a>,
+        program_id: &Pubkey
+
     )-> ProgramResult{
 
 
-        //expiration time saved
         let clock: Clock= Clock::get()?;
         let current_time: u64 = clock.unix_timestamp as u64;
         let maximum_time_allowed: u64  = current_time.checked_add(terms.expiration_time).ok_or(ArithmeticError)?;
-        if init_raffle.raffle_time < current_time{return Err(InvalidRaffleTime.into());}
-        if init_raffle.raffle_time > maximum_time_allowed{return Err(InvalidRaffleTime.into());}
+
+        if init_raffle.raffle_time < current_time{return Err(InvalidRaffleTime.into());}//no raffle in the past allowed
+        if init_raffle.raffle_time > maximum_time_allowed{return Err(InvalidRaffleTime.into());}//no raffle allowed in the far future
         if init_raffle.winner_count > terms.maximum_winner_count {return Err(InvalidWinnerNumber.into());}
 
         let n: usize = init_raffle.winner_count as usize;
         let winners: Vec<u64> = vec![0; n];
 
+        if winners.len() != init_raffle.rewards.len() {return Err(InvalidWinnerNumber.into());}
+
+        let (raffle_account_address, bump) = 
+        Pubkey::find_program_address(&[b"raffle", &raffle_no.to_le_bytes()], program_id);
+
+        msg!("{:?}",reward_mint);
+        msg!("{}",init_raffle.is_increasing_pool);
+        msg!("{}",init_raffle.requirement_to_participate);
+        msg!("{:?}",reward_mint);
+        msg!("{:?}",participation_fee_mint);
+        msg!("{:?}",init_raffle.requirement_mint);
+
+        if init_raffle.is_increasing_pool == 1 {
+            if reward_mint != participation_fee_mint { return Err(InvalidMint.into());}
+        }
+
+
+
+        if init_raffle.requirement_to_participate == 1 {
+            if init_raffle.requirement_mint == reward_mint{return Err(InvalidMint.into());}
+            if init_raffle.requirement_mint == participation_fee_mint{return Err(InvalidMint.into());}
+        }
+
+
+
         let data: Raffle = Raffle{
             raffle_state: 1,
             reward_decimals,
-            initializer: initializer.to_bytes(),
+            initializer: initializer.key.to_bytes(),
             reward_mint,
             raffle_name: init_raffle.raffle_name,
             raffle_no,
@@ -1354,24 +1588,31 @@ impl Processor {
             rewards: init_raffle.rewards.clone(),
             requirement_to_participate: init_raffle.requirement_to_participate,
             requirement_amount_token: init_raffle.requirement_amount_token,
-            requirement_nft_mint: init_raffle.requirement_nft_mint,
+            requirement_mint: init_raffle.requirement_mint,
             participation_fee_decimals,
             participation_fee_type: init_raffle.participation_fee_type,
             winners,
             winner_count:init_raffle.winner_count,
             current_winner_count: 0,
             number_of_entitled_winners: 0,
+            bump,
+            required_token_decimals: init_raffle.required_token_decimals,
+            is_increasing_pool: init_raffle.is_increasing_pool,
+            transfer_fee_to_pool: init_raffle.transfer_fee_to_pool.clone(),
+            fee_collected: 0,
         };
 
+        let mut serialized_data: Vec<u8> = Vec::new();
+        data.serialize(&mut serialized_data)?;
 
-
+        Self::create_raffle_pda(initializer, raffle_pda, program_id, &raffle_account_address,&raffle_no, serialized_data.len(),bump)?;
 
         data.serialize(&mut &mut raffle_pda.data.borrow_mut()[..])?;
 
 
         Ok(())
     }
-    
+
     fn check_accounts_init_raffle(
         counter:&RaffleCounter,
         terms:&Term,
@@ -1404,7 +1645,7 @@ impl Processor {
 
         Ok(())
     }
-    
+
     fn call_rng<'a>(
         authority: &AccountInfo<'a>,
         entropy_account: &AccountInfo<'a>,
@@ -1468,13 +1709,14 @@ impl Processor {
 
     }
     
-    fn check_amount(
-        amount: u64, ata:&AccountInfo
+    fn check_mint_and_owner_and_amount(
+        mint: &Pubkey,owner: &Pubkey,ata:&AccountInfo,amount:u64
     ) -> ProgramResult{
 
         let ata_unpacked: spl_token::state::Account = Account::unpack_from_slice(&ata.data.borrow())?;
 
-
+        if mint != &ata_unpacked.mint {panic!()}
+        if owner != &ata_unpacked.owner {panic!()}
         if amount > ata_unpacked.amount{panic!()}
 
         Ok(())
@@ -1482,14 +1724,15 @@ impl Processor {
     }
 
     fn abort_raffle<'a>(
-        initializer:&AccountInfo<'a>,
         initializer_ata:&AccountInfo<'a>,
         raffle_pda:&AccountInfo<'a>,
         raffle_ata:&AccountInfo<'a>,
         reward_mint:&AccountInfo<'a>,
         token_program:&AccountInfo<'a>,
         total_rewards: u64,
-        decimals:u8
+        raffle_no:u64,
+        decimals:u8,
+        bump:u8
     ) -> ProgramResult {
 
 
@@ -1501,108 +1744,87 @@ impl Processor {
             &raffle_pda.key, 
             &[],total_rewards,decimals)?;
 
+
         invoke_signed(
         &transfer_token_ix, 
-        &[token_program.clone(),raffle_ata.clone(),reward_mint.clone(),initializer_ata.clone(),initializer.clone()],
-        &[&[]]
+        &[token_program.clone(),raffle_ata.clone(),reward_mint.clone(),initializer_ata.clone(),raffle_pda.clone()],
+        &[&[b"raffle", &raffle_no.to_le_bytes(),&[bump]]]
         )?;
 
         Ok(())
     }
 
-    fn send_fee_as_sol<'a>(
-        raffle_account:&AccountInfo<'a>,
-        initializer:&AccountInfo<'a>,
-        fee_collector_account:&AccountInfo<'a>,
-        fee_percent:u64,
-    ) -> ProgramResult {
-
-        let rent: Rent = Rent::default();
-        let rent_amount: u64 = rent.minimum_balance(187);
-
-
-        msg!("1");
-        let total_value: u64 = **raffle_account.try_borrow_lamports()?;
-
-        msg!("2");
-        let collected_value: u64 = total_value.checked_sub(rent_amount).ok_or(ArithmeticError)?;
-        msg!("3");
-        let collected_value_div_by_100: u64 = collected_value.checked_div(100).ok_or(ArithmeticError)?;
-        msg!("4");
-        let total_fee:u64 = collected_value_div_by_100.checked_mul(fee_percent).ok_or(ArithmeticError)?;
-        msg!("5");
-        let transfer_to_initializer: u64 = collected_value.checked_sub(total_fee).ok_or(ArithmeticError)?;
-        {
-            msg!("total_value = {}",total_value);
-            msg!("collected_value = {}",collected_value);
-            msg!("collected_value_div_by_100 = {}",collected_value_div_by_100);
-            msg!("total_fee = {}",total_fee);
-            msg!("transfer_to_initializer = {}",transfer_to_initializer);
-        }
-
-
-        **raffle_account.try_borrow_mut_lamports()? -= total_fee;
-        **raffle_account.try_borrow_mut_lamports()? -= transfer_to_initializer;
-
-        **fee_collector_account.try_borrow_mut_lamports()? += total_fee;
-        **initializer.try_borrow_mut_lamports()? += transfer_to_initializer;
-
-        Ok(())
-    }
-
-    fn send_fee_as_token<'a>(
-        fee_collector_ata: &AccountInfo<'a>,
-        raffle_ata: &AccountInfo<'a>,
-        raffle_pda: &AccountInfo<'a>,
-        initializer_ata: &AccountInfo<'a>,
-        token_program: &AccountInfo<'a>,
-        participation_fee_mint: &AccountInfo<'a>,
-        fee_percent:u64,
+    fn transfer_tokens_from_raffle_pda<'a>(
+        mint:&AccountInfo<'a>,
+        raffle_ata:&AccountInfo<'a>,
+        raffle_pda:&AccountInfo<'a>,
+        destination_ata:&AccountInfo<'a>,
+        token_program:&AccountInfo<'a>,
+        decimals:u8,
+        amount:u64,
         raffle_no:u64,
-        decimals:u8
-    ) -> ProgramResult {
+        bump:u8
 
-        let raffle_ata_unpacked: spl_token::state::Account = Account::unpack_from_slice(&raffle_ata.data.borrow())?;
+    )-> ProgramResult{
 
-        let collected_value: u64 = raffle_ata_unpacked.amount;
+        msg!("destination_ata ata {}",destination_ata.key.to_string());
+        msg!("raffle ata {}",raffle_ata.key.to_string());
+        msg!("mint  {}",mint.key.to_string());
+        msg!("token_program  {}",token_program.key.to_string());
 
 
-        let collected_value_div_by_100: u64 = collected_value.checked_div(100).ok_or(ArithmeticError)?;
-        let total_fee:u64 = collected_value_div_by_100.checked_mul(fee_percent).ok_or(ArithmeticError)?;
-        let transfer_to_initializer: u64 = collected_value.checked_sub(total_fee).ok_or(ArithmeticError)?;
 
-        let transfer_collected_fee_to_initializer
-         = spl_token::instruction::transfer_checked(
+        let transfer_token_ix = spl_token::instruction::transfer_checked(
             &token_program.key,
             &raffle_ata.key, 
-            &participation_fee_mint.key, 
-            &initializer_ata.key, 
+            &mint.key, 
+            &destination_ata.key, 
             &raffle_pda.key, 
-            &[],transfer_to_initializer,decimals)?;
+            &[],amount,decimals)?;
 
         invoke_signed(
-        &transfer_collected_fee_to_initializer, 
-        &[token_program.clone(),raffle_ata.clone(),participation_fee_mint.clone(),fee_collector_ata.clone(),raffle_pda.clone()],
-        &[&[b"raffle", &raffle_no.to_le_bytes()]]
-        )?;
-
-        let transfer_fee_to_fee_collector
-         = spl_token::instruction::transfer_checked(
-            &token_program.key,
-            &raffle_ata.key, 
-            &participation_fee_mint.key, 
-            &fee_collector_ata.key, 
-            &raffle_pda.key, 
-            &[],total_fee,decimals)?;
-
-        invoke_signed(
-        &transfer_fee_to_fee_collector, 
-        &[token_program.clone(),raffle_ata.clone(),participation_fee_mint.clone(),fee_collector_ata.clone(),raffle_pda.clone()],
-        &[&[b"raffle", &raffle_no.to_le_bytes()]]
+        &transfer_token_ix, 
+        &[token_program.clone(),raffle_ata.clone(),mint.clone(),destination_ata.clone(),raffle_pda.clone()],
+        &[&[b"raffle", &raffle_no.to_le_bytes(), &[bump]]],
         )?;
 
         Ok(())
     }
+    
+    fn transfer_tokens_to_raffle_pda<'a>(
+        mint:&AccountInfo<'a>,
+        raffle_ata:&AccountInfo<'a>,
+        owner:&AccountInfo<'a>,
+        owner_ata:&AccountInfo<'a>,
+        token_program:&AccountInfo<'a>,
+        decimals:u8,
+        amount:u64,
+
+    )-> ProgramResult{
+
+        msg!("owner ata {}",owner_ata.key.to_string());
+        msg!("owner  {}",owner.key.to_string());
+        msg!("raffle ata {}",raffle_ata.key.to_string());
+        msg!("mint  {}",mint.key.to_string());
+        msg!("token_program  {}",token_program.key.to_string());
+
+        let transfer_token_ix = spl_token::instruction::transfer_checked(
+            &token_program.key,
+            &owner_ata.key, 
+            &mint.key, 
+            &raffle_ata.key, 
+            &owner.key, 
+            &[],amount,decimals)?;
+
+        invoke(
+        &transfer_token_ix, 
+        &[token_program.clone(),raffle_ata.clone(),mint.clone(),owner_ata.clone(),owner.clone()],
+        )?;
+
+        Ok(())
+    }
+    
+
 
 }
 
@@ -1610,7 +1832,7 @@ impl Processor {
 //cekilis kayit acik - 1
 //cekilis yapildi  - 2
 //kazanan yazildi - 3
-//kazanan odulu aldi - 4
+
 
 
 

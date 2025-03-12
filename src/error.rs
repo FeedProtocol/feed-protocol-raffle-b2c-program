@@ -63,24 +63,26 @@ pub enum RaffleProgramError {
   #[error("invalid temrs account")]//18
   InvalidTerms,
 
-  #[error("invalid temrs account")]//19
+  #[error("invalid raffle time")]//19
   InvalidRaffleTime,
-
 
   #[error("account should not be writable")]//20
   WritableAccount,
 
-  #[error("reward type account is invalid")]//20
+  #[error("reward type account is invalid")]//21
   InvalidRewardType,
 
-  #[error("fee type account is invalid")]//20
+  #[error("fee type account is invalid")]//22
   InvalidFeeType,
 
-  #[error("invalid maximum number of winners")]//20
+  #[error("invalid maximum number of winners")]//23
   InvalidWinnerNumber,
 
-  #[error("rng program failed")]//20
+  #[error("rng program failed")]//24
   RNGProgramError,
+
+  #[error("invalid mint")]//25
+  InvalidMint,
 
 }
 

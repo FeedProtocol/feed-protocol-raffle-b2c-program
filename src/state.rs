@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
     //Rent Fee = 0.0025 SOL = 50 cent
     //Raffle Creation Fee : 0 SOL = 0 USD
 
-#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq)]//187
+#[derive(BorshSerialize, BorshDeserialize, Debug, Clone, PartialEq)]
 pub struct Raffle{
     pub raffle_state:u8,
     pub is_unlimited_participant_allowed:u8,
@@ -20,15 +20,20 @@ pub struct Raffle{
     pub participation_fee_type: u64,
     pub rewards:Vec<u64>,  //write the number of tokens to distribute
     pub winners:Vec<u64>,
-    pub requirement_to_participate:u8, //0 no req, 1 token, 2 nft
+    pub requirement_to_participate:u8, //0 no req, 1 token
     pub requirement_amount_token:u64,  //
-    pub requirement_nft_mint:[u8;32],  //
+    pub requirement_mint:[u8;32],  //
+    pub required_token_decimals:u8,
     pub reward_decimals:u8,
     pub participation_fee_decimals:u8,
+    pub is_increasing_pool:u8,
+    pub transfer_fee_to_pool:Vec<u64>,
     pub raffle_time:u64,
     pub winner_count: u64,
     pub current_winner_count: u64,
-    pub number_of_entitled_winners: u64
+    pub number_of_entitled_winners: u64,
+    pub fee_collected:u8,
+    pub bump:u8
   }
 
 #[derive(BorshDeserialize, Debug, PartialEq)]
@@ -44,8 +49,11 @@ pub struct InitRaffle{
   pub rewards: Vec<u64>,
   pub requirement_to_participate: u8,
   pub requirement_amount_token: u64,
-  pub requirement_nft_mint: [u8;32],
+  pub requirement_mint: [u8;32],
+  pub required_token_decimals:u8,
   pub winner_count: u64,
+  pub is_increasing_pool:u8,
+  pub transfer_fee_to_pool:Vec<u64>,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]//48
@@ -98,4 +106,11 @@ pub struct RewardFeeType{
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]//9
 pub struct FeeCollector{
     pub initialized:u8,
+}
+
+#[derive(BorshDeserialize, Debug, PartialEq)]
+pub struct Rewards{
+
+  pub rewards: Vec<u64>,
+
 }
